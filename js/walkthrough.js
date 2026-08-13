@@ -272,13 +272,16 @@
       });
     });
 
-    const scroller = document.querySelector(".walkthrough-stage-scroll");
     const activeBox = layout.positions.get(activeNode?.id);
-    if (activeBox && scroller && state.autoScroll !== false) {
+    if (activeBox && state.autoScroll !== false) {
       window.requestAnimationFrame(() => {
-        scroller.scrollTo({
-          left: Math.max(0, (activeBox.x + activeBox.width / 2) * scale - scroller.clientWidth / 2),
-          top: Math.max(0, (activeBox.y + activeBox.height / 2) * scale - scroller.clientHeight / 2),
+        const header = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--header-h")) || 0;
+        const drawer = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--drawer-h")) || 0;
+        const nodeY = (activeBox.y + activeBox.height / 2) * scale;
+        const svgTop = svg.getBoundingClientRect().top + window.scrollY;
+        const viewH = Math.max(160, window.innerHeight - header - drawer);
+        window.scrollTo({
+          top: Math.max(0, svgTop + nodeY - header - viewH / 2),
           behavior: playing ? "auto" : "smooth",
         });
       });

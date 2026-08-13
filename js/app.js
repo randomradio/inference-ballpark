@@ -48,48 +48,139 @@
     return models.find((item) => item.id === selectedId) || models[0];
   }
 
-  function readState() {
-    const eta = Math.max(0.05, +$("#efficiency").value / 100);
+  const CACHE_LABEL = {
+    "mla-compressed": "compressed KV",
+    "hybrid-kda-mla": "KDA state + MLA KV",
+    "mla-absorbed": "absorbed KV",
+    "paged-gqa": "paged GQA KV",
+  };
+
+  function servingFor(model) {
+    const item = typeof model === "string" ? models.find((m) => m.id === model) : model;
+    const derived = window.BallparkRoofline.deriveServing(item, readCluster());
+    return {
+      ...derived,
+      mtpAccept: item.dims.mtpAcceptDefault,
+      measuredTps: item.measuredTps ?? "",
+    };
+  }
+
+  function ensureMinNodes(serving) {
+    const gpn = Math.max(1, +$("#gpn").value || 8);
+    const replica = window.BallparkRoofline.replicaGpus(serving);
+    const need = serving.nodes || Math.max(1, Math.ceil(replica / gpn));
+    if (+$("#nodes").value < need) $("#nodes").value = need;
+  }
+
+  function readCluster() {
+    const mfu = Math.max(0.05, +$("#efficiency").value / 100);
+    const hbmEff = Math.max(0.05, +$("#hbmeff").value / 100);
     const neteff = Math.max(0.05, +$("#neteff").value / 100);
     return {
-      hw: {
-        nodes: Math.max(1, +$("#nodes").value || 1),
-        gpn: Math.max(1, +$("#gpn").value || 1),
-        flopsPerGpu: Math.max(1, +$("#compute").value) * 1e12 * eta,
-        hbmPerGpu: Math.max(0.1, +$("#hbm").value) * 1e12 * eta,
-        hbmCapBytes: Math.max(8, +$("#hbmCap").value) * 1e9,
-        netPerGpu: Math.max(1, +$("#network").value) * 1e9 * neteff * eta,
-        intraPerGpu: 450e9 * eta,
-        tp: Math.max(1, +$("#tp").value || 1),
-        ep: Math.max(1, +$("#ep").value || 1),
-        pp: Math.max(1, +$("#pp").value || 1),
-        servingMode: $("#servingMode").value,
-        pdP: Math.max(0, +$("#pdP").value || 0),
-        pdD: Math.max(0, +$("#pdD").value || 0),
-      },
+      nodes: Math.max(1, +$("#nodes").value || 1),
+      gpn: Math.max(1, +$("#gpn").value || 1),
+      flopsPerGpu: Math.max(1, +$("#compute").value) * 1e12 * mfu,
+      hbmPerGpu: Math.max(0.1, +$("#hbm").value) * 1e12 * hbmEff,
+      hbmCapBytes: Math.max(8, +$("#hbmCap").value) * 1e9,
+      netPerGpu: Math.max(1, +$("#network").value) * 1e9 * neteff,
+      intraPerGpu: Math.max(0.1, +$("#nvlink").value) * 1e12 * neteff,
+    };
+  }
+
+  function mergeHw(cluster, serving) {
+    return {
+      ...cluster,
+      tp: serving.tp,
+      ep: serving.ep,
+      pp: serving.pp,
+      servingMode: serving.servingMode,
+      pdP: serving.pdP,
+      pdD: serving.pdD,
+      layout: serving.layout || "overlap",
+      attnMode: serving.attnMode || "dp",
+    };
+  }
+
+  function readState() {
+    const serving = servingFor(selectedModel());
+    return {
+      hw: mergeHw(readCluster(), serving),
       req: {
         input: +$("#input").value * 1000,
         output: +$("#output").value,
         cache: +$("#cache").value / 100,
         batch: Math.max(1, +$("#batch").value || 1),
-        mtpAccept: Math.max(0.25, +$("#mtpAccept").value || 1),
+        mtpAccept: serving.mtpAccept,
       },
-      measured: +$("#measuredTps").value || 0,
+      measured: +serving.measuredTps || 0,
     };
   }
 
-  function applyModelDefaults(model, { topology } = {}) {
-    if (topology) {
-      const p = model.parallel;
-      $("#tp").value = p.tp;
-      $("#ep").value = p.ep;
-      $("#pp").value = p.pp;
-      $("#pdP").value = p.pdP;
-      $("#pdD").value = p.pdD;
-      $("#servingMode").value = p.servingMode;
+  function topologyCheck(model, serving, gpus) {
+    const d = model.dims;
+    const replica = window.BallparkRoofline.replicaGpus({
+      tp: serving.tp, ep: serving.ep, pp: serving.pp, layout: serving.layout,
+    });
+    const flags = { tp: false, ep: false, pp: false };
+    const issues = [];
+    if (d.heads && d.heads % serving.tp !== 0) {
+      flags.tp = true;
+      issues.push(`TP 应整除 ${d.heads} heads`);
     }
-    $("#mtpAccept").value = model.dims.mtpAcceptDefault;
-    $("#measuredTps").value = model.measuredTps ?? "";
+    if (d.experts && d.experts % serving.ep !== 0) {
+      flags.ep = true;
+      issues.push(`EP 应整除 ${d.experts} experts`);
+    }
+    if (serving.pp > d.layers) {
+      flags.pp = true;
+      issues.push(`PP 不能超过 ${d.layers} layers`);
+    }
+    if (replica > gpus) issues.push(`replica ${replica} > ${gpus} GPU`);
+    else if (gpus % replica !== 0) {
+      issues.push(`${gpus} GPU 不能被 replica ${replica} 整除，会丢掉 ${gpus % replica} 张卡`);
+    }
+    return { replica, flags, issues };
+  }
+
+  function renderTopo(model, serving, gpus) {
+    const d = model.dims;
+    const facts = [
+      model.scale,
+      `${d.layers}L`,
+      `${d.heads} heads`,
+      d.kvHeads ? `${d.kvHeads} KV heads` : null,
+      `${d.experts} exp / Top-${d.activeExperts}`,
+      CACHE_LABEL[model.cacheKind] || model.cacheKind,
+    ].filter(Boolean);
+    $("#topoFacts").innerHTML = facts.map((fact) => `<span class="fact">${fact}</span>`).join("");
+    const check = topologyCheck(model, serving, gpus);
+    const replicaNodes = serving.nodes || Math.max(1, Math.ceil(check.replica / Math.max(1, +$("#gpn").value || 8)));
+    const packs = Math.max(0, Math.floor(gpus / check.replica));
+    const attn = serving.attnMode === "tp" ? "TP" : "DP";
+    const layout = serving.layout === "mesh" ? "网格 TP×EP" : "重叠 TP∩EP";
+    const rows = [
+      ["TP", serving.tp],
+      ["EP", serving.ep],
+      ["PP", serving.pp],
+      ["Attention", attn],
+      ["布局", layout],
+      ["Serving", serving.servingMode === "disaggregated" ? `分离 ${serving.pdP}:${serving.pdD}` : "聚合"],
+      ["Replica", `${check.replica} 卡 / ${replicaNodes} 节点`],
+    ];
+    $("#deployDl").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+    const note = $("#topoNote");
+    if (check.issues.length) {
+      note.textContent = check.issues.join(" · ");
+      note.classList.add("is-off");
+    } else {
+      note.textContent = packs > 1
+        ? `${model.name} · 当前机群可放 ${packs} 份 replica`
+        : `${model.name} · 由架构和卡推导，无需手调`;
+      note.classList.remove("is-off");
+    }
+    $("#commNote").textContent = serving.why || window.BallparkRoofline.commPlan({
+      ...serving, gpn: Math.max(1, +$("#gpn").value || 1),
+    }).note;
   }
 
   function syncModeButtons() {
@@ -225,7 +316,7 @@
       ? "❚❚ 播放中…"
       : mid
         ? "▶ 继续播放"
-        : "▶ 播放完整推理路径";
+        : "▶ 播放路径";
     const total = playSteps.length || 1;
     const pct = playIndex < 0 ? 0 : ((playIndex + 1) / total) * 100;
     $("#playBar").style.width = `${pct}%`;
@@ -248,7 +339,6 @@
     $("#modelTabs").querySelectorAll(".tab").forEach((button) => {
       button.addEventListener("click", () => {
         selectedId = button.dataset.model;
-        applyModelDefaults(selectedModel());
         branch = "kda";
         resetPlay();
       });
@@ -358,12 +448,26 @@
     $("#tpotOut").textContent = fmtTime(est.tpot);
     $("#tpsOut").textContent = compact(est.tpsPerGpu);
     $("#tpmOut").textContent = compact(est.tpm);
+    $("#tpmNote").textContent = est.fits
+      ? `billable 输入+输出 · output ${compact(est.tpmOutput)}/min · ${est.reqPerS.toFixed(1)} req/s`
+      : "billable 输入+输出 / min";
     $("#bottleneckOut").textContent = `${est.boundPhase} · ${est.bottleneck}`;
-    $("#boundLayer").textContent = est.kvLimited ? "KV 显存限制了 batch" : "当前路径最慢资源";
+    $("#peekTtft").textContent = fmtTime(est.ttft);
+    $("#peekTpot").textContent = fmtTime(est.tpot);
+    $("#peekTps").textContent = est.fits ? compact(est.tpsPerGpu) : "—";
+    $("#peekTpm").textContent = est.fits ? compact(est.tpm) : "—";
+    $("#peekBound").textContent = `${est.boundPhase} · ${est.bottleneck}`;
+    $("#boundLayer").textContent = !est.fits
+      ? `replica ${est.perReplica} 装不进机群`
+      : est.kvLimited ? "KV 显存限制了 batch" : "当前路径最慢资源";
     $("#kvOut").textContent = `${est.effectiveB} / ${state.req.batch}`;
     $("#kvNote").textContent = est.kvLimited
       ? `显存最多 ${est.kvMaxB} 并发 · 权重 ${fmtBytes(est.weights)}`
-      : `KV 上限 ${est.kvMaxB} · 权重 ${fmtBytes(est.weights)}`;
+      : `KV 上限 ${est.kvMaxB} · 权重 ${fmtBytes(est.weights)} · ${est.servingLabel}`;
+    if (!est.fits) {
+      $("#tpsOut").textContent = "—";
+      $("#tpmOut").textContent = "—";
+    }
     const measured = state.measured || model.measuredTps;
     if (measured && Number.isFinite(est.tpsPerGpu) && est.tpsPerGpu > 0) {
       const ratio = measured / est.tpsPerGpu;
@@ -374,20 +478,68 @@
   }
 
   function renderCompare(state) {
+    const cluster = readCluster();
     $("#compareBody").innerHTML = models.map((model) => {
-      const est = window.BallparkRoofline.estimate(model, state.hw, state.req);
+      const serving = servingFor(model);
+      const hw = mergeHw(cluster, serving);
+      const req = { ...state.req, mtpAccept: serving.mtpAccept };
+      const est = window.BallparkRoofline.estimate(model, hw, req);
       const current = model.id === selectedId;
-      return `<tr>
-        <td><strong>${model.name}</strong>${current ? " ·" : ""}<br><span class="badge">${model.family}</span></td>
-        <td>${fmtTime(est.ttft)}</td>
-        <td>${fmtTime(est.tpot)}</td>
-        <td><strong>${compact(est.tpm)}</strong></td>
-      </tr>`;
+      return `<button type="button" class="cmp${current ? " current" : ""}" data-model="${model.id}">
+        <strong>${model.name}</strong>
+        <div class="cmp-row">
+          <span>TTFT ${fmtTime(est.ttft)}</span>
+          <span>TPOT ${fmtTime(est.tpot)}</span>
+          <b>${est.fits ? `${compact(est.tpm)} TPM` : "装不下"}</b>
+        </div>
+      </button>`;
     }).join("");
+    $("#compareBody").querySelectorAll("[data-model]").forEach((el) => {
+      el.addEventListener("click", () => {
+        if (selectedId === el.dataset.model) return;
+        selectedId = el.dataset.model;
+        branch = "kda";
+        resetPlay();
+      });
+    });
+  }
+
+  function syncShellOffsets() {
+    const header = document.querySelector("header.chrome");
+    const drawer = document.getElementById("throughput");
+    const root = document.documentElement.style;
+    root.setProperty("--header-h", `${header ? header.offsetHeight : 0}px`);
+    root.setProperty("--drawer-h", `${drawer ? drawer.offsetHeight : 0}px`);
+  }
+
+  function drawerIsOpen() {
+    return $("#throughput").classList.contains("is-open");
+  }
+
+  function setDrawer(open) {
+    const el = $("#throughput");
+    el.classList.toggle("is-open", open);
+    el.setAttribute("aria-expanded", open ? "true" : "false");
+    $("#drawerToggleLabel").textContent = open ? "收起" : "展开";
+    try { sessionStorage.setItem("ballpark-drawer-open", open ? "1" : "0"); } catch (_err) { /* ignore */ }
+    window.requestAnimationFrame(syncShellOffsets);
+    window.setTimeout(syncShellOffsets, 320);
+  }
+
+  function bindDrawer() {
+    $("#drawerToggle").addEventListener("click", () => setDrawer(!drawerIsOpen()));
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && drawerIsOpen()) setDrawer(false);
+    });
+    let open = false;
+    try { open = sessionStorage.getItem("ballpark-drawer-open") === "1"; } catch (_err) { open = false; }
+    setDrawer(open);
   }
 
   function render() {
+    syncShellOffsets();
     const model = selectedModel();
+    ensureMinNodes(servingFor(model));
     const graph = window.MODEL_TENSOR_GRAPHS[model.id];
     const state = readState();
     const gpus = state.hw.nodes * state.hw.gpn;
@@ -458,17 +610,19 @@
 
     renderMetrics(est, model, state);
     renderCompare(state);
+    renderTopo(model, servingFor(model), gpus);
     updatePlayUi(playing || playIndex < playSteps.length - 1 ? null : (playIndex >= 0 ? "路径结束" : null));
+    syncShellOffsets();
   }
 
   try {
     renderTabs();
     bindModes();
+    bindDrawer();
     bindPlay();
-    applyModelDefaults(selectedModel(), { topology: true });
     document.querySelectorAll(".jigs input, .jigs select").forEach((el) => {
       if (el.id === "playSpeed") return;
-      el.addEventListener("input", render);
+      el.addEventListener("input", () => render());
     });
     window.addEventListener("resize", () => render());
     render();
