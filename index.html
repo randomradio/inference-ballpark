@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="用单元架构与硬件 roofline 估算 Prefill / Decode 吞吐">
+  <title>Inference Ballpark · 架构 × 硬件吞吐</title>
+  <style>
+    :root{--ink:#15231e;--muted:#64716b;--paper:#f4f1e9;--card:#fffdf8;--line:#d8d9cf;--lime:#c9f36a;--green:#184e3b;--orange:#ff8d5b;--blue:#83b8ff;--violet:#a67cff;--shadow:0 18px 50px rgba(21,35,30,.08)}
+    *{box-sizing:border-box}html,body{height:100%;margin:0}body{background:var(--paper);color:var(--ink);font:14px/1.5 Inter,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;display:flex;flex-direction:column;overflow:hidden}button,input,select{font:inherit}a{color:inherit}
+    header{flex:0 0 auto;padding:10px 18px;border-bottom:1px solid var(--line);background:var(--card)}
+    .nav{display:flex;align-items:center;justify-content:space-between;gap:16px}.brand{display:flex;gap:10px;align-items:center;font-weight:780;letter-spacing:-.02em}.mark{width:28px;height:28px;border-radius:50%;background:var(--green);display:grid;place-items:center;color:var(--lime);font-size:10px}.stamp{padding:5px 10px;border:1px solid var(--line);border-radius:999px;font-size:11px;color:var(--muted);white-space:nowrap}.nav-stats{display:flex;gap:18px;color:var(--muted);font-size:12px}.nav-stats b{color:var(--ink);font-weight:750}
+    .studio{flex:1;display:grid;grid-template-columns:minmax(0,1fr) clamp(290px,30vw,400px);min-height:0}
+    .stage{display:flex;flex-direction:column;min-width:0;min-height:0;padding:12px 14px 14px 18px;gap:10px}
+    .stage-head{display:flex;justify-content:space-between;gap:16px;align-items:end}
+    .kicker{font-size:10px;text-transform:uppercase;letter-spacing:.14em;font-weight:800;color:var(--muted)}h1,h2,h3{margin:0}h2{font-size:clamp(16px,1.5vw,22px);letter-spacing:-.04em;line-height:1.15;white-space:nowrap}.hint{color:var(--muted);font-size:11px;line-height:1.45}
+    .stage-head p{max-width:54ch;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+    .stage-legend{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:10px;color:var(--muted);font-weight:700}.swatch{width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:5px;vertical-align:middle}
+    .zoomjig{display:inline-flex;align-items:center;gap:4px;margin-right:6px;padding-right:10px;border-right:1px solid var(--line)}
+    .zoomjig button{border:1px solid var(--line);background:#fbfaf5;border-radius:6px;padding:2px 7px;font-size:10px;font-weight:800;cursor:pointer;color:var(--muted)}
+    .zoomjig button:hover{border-color:var(--ink);color:var(--ink)}.zoomjig b{min-width:34px;text-align:center;color:var(--ink);font-variant-numeric:tabular-nums}
+    .walkthrough-stage-scroll{flex:1;min-height:0;overflow:auto;border:1px solid var(--line);border-radius:16px;background:#fbfaf5}
+    svg.walkthrough{display:block;min-width:100%}
+    .walkthrough-edge{fill:none;stroke:#c5c7bc;stroke-width:1.4}.walkthrough-edge.is-active{stroke:var(--green);stroke-width:2.2}.walkthrough-edge.is-cache{stroke:var(--orange);stroke-dasharray:5 4}
+    .walkthrough-node-face{fill:#fffdf8;stroke:#d8d9cf;stroke-width:1}
+    .walkthrough-node.is-selected .walkthrough-node-face{stroke:var(--green);stroke-width:2.2;fill:#f4fbe3}
+    .walkthrough-node.is-upstream .walkthrough-node-face{stroke:#7a8f55}
+    .walkthrough-node.is-done .walkthrough-node-face{fill:#eef6d8;stroke:#9bb56a}
+    .walkthrough-node.is-dimmed{opacity:.28}.walkthrough-node.is-pending{opacity:.22}
+    .walkthrough-node.is-hot .walkthrough-node-face{fill:#fff2e9;stroke:var(--orange)}
+    .walkthrough-node-back{fill:#eceadf}.walkthrough-node-label{font:700 11px Inter,sans-serif;fill:var(--ink)}.walkthrough-node-shape{font:10px ui-monospace,SFMono-Regular,monospace;fill:var(--muted)}.walkthrough-node-index{font:9px ui-monospace,SFMono-Regular,monospace;fill:#9aa39c}
+    .walkthrough-block-frame{fill:#f4f2e7;stroke:#cfd1c3;stroke-width:1.2}
+    .walkthrough-block-label{font:800 11px Inter,sans-serif;fill:var(--green);letter-spacing:.12em}
+    .walkthrough-group-label{font:800 10px Inter,sans-serif;fill:#8b957f;letter-spacing:.14em}
+    .walkthrough-group-rule{stroke:#dcded0;stroke-width:1;stroke-dasharray:3 4}
+    .jigs{overflow:auto;border-left:1px solid var(--line);background:var(--card);min-height:0}
+    .jigs-play{position:sticky;top:0;z-index:3;background:var(--card);padding:14px 16px 12px;border-bottom:1px solid var(--line)}
+    .play-btn{width:100%;border:0;background:var(--green);color:var(--lime);padding:12px 14px;border-radius:12px;font-weight:800;letter-spacing:.02em;cursor:pointer}
+    .play-btn:hover{filter:brightness(1.08)}.play-btn.is-playing{background:var(--ink);color:white}
+    .play-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px}
+    .play-row button{border:1px solid var(--line);background:#fbfaf5;padding:7px 8px;border-radius:9px;cursor:pointer;font-size:12px;font-weight:700}
+    .play-row button:hover{border-color:var(--ink)}
+    .play-meter{height:6px;background:#eeeae0;border-radius:99px;overflow:hidden;margin-top:10px}
+    .play-meter span{display:block;height:100%;width:0;background:var(--green);transition:width .2s ease}
+    .play-status{display:flex;justify-content:space-between;gap:8px;margin-top:8px;font-size:11px;color:var(--muted)}.play-status b{color:var(--ink)}
+    .jig{padding:14px 16px;border-bottom:1px solid var(--line)}
+    .jig h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+    .model-tabs,.mode-tabs{display:flex;flex-wrap:wrap;gap:6px}
+    .tab,.mode{border:1px solid var(--line);background:transparent;padding:6px 10px;border-radius:999px;cursor:pointer;font-size:12px;font-weight:700}
+    .tab:hover,.mode:hover{background:#f0eee6}
+    .tab.active,.mode.active{background:var(--ink);color:white;border-color:var(--ink)}
+    .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:8px}.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+    .field label{display:block;font-size:10px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}.field label span{float:right;color:var(--green);text-transform:none;letter-spacing:0;font-weight:700}
+    input[type=number],select{width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 8px;background:white;color:var(--ink)}
+    input[type=range]{width:100%;accent-color:var(--green)}
+    .pipeline{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}.chip{padding:4px 8px;border-radius:999px;background:#f0eee6;font-size:10px;font-weight:700;color:var(--muted)}.chip.on{background:var(--green);color:#f8fff6}
+    .inspector .kind{font-size:10px;font-weight:800;letter-spacing:.08em;color:var(--muted)}.inspector h4{margin:4px 0 8px;font-size:18px;letter-spacing:-.03em}
+    .inspector dl{margin:0;display:grid;grid-template-columns:72px 1fr;gap:6px 8px;font-size:12px}.inspector dt{color:var(--muted)}.inspector dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
+    .inspector p{font-size:12px;color:var(--muted);margin:10px 0 0}.sources-inline{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}.sources-inline a{font-size:11px;color:var(--green)}
+    .metrics{display:grid;grid-template-columns:1fr 1fr;gap:8px}.metric{padding:10px;border:1px solid var(--line);border-radius:10px;background:#fbfaf5}.metric span{display:block;font-size:9px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}.metric b{display:block;margin-top:4px;font-size:18px;letter-spacing:-.04em}.metric small{display:block;color:var(--muted);font-size:10px;margin-top:3px}
+    table{width:100%;border-collapse:collapse;font-size:11px}th{text-align:left;color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em;padding:8px 4px;border-bottom:1px solid var(--line)}td{padding:8px 4px;border-bottom:1px solid var(--line);white-space:nowrap}td strong{font-size:12px}.badge{padding:2px 6px;border-radius:4px;background:#eeeae0;font-size:9px}.hot{color:#9a4b28}
+    details.jig>summary{cursor:pointer;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:800;list-style:none}details.jig>summary::-webkit-details-marker{display:none}details.jig .jig-body{padding-top:12px}
+    .sources-list{margin:0;padding-left:16px;color:var(--muted);font-size:11px}.sources-list li{padding:4px 0}.sources-list a{text-underline-offset:2px}
+    @media(max-width:1180px){.nav-stats{display:none}}
+    @media(max-width:900px){.stage{padding:10px 10px 12px 12px}.grid-3{grid-template-columns:1fr 1fr}}
+    @media(max-width:680px){body{overflow:auto;height:auto}.studio{grid-template-columns:1fr;height:auto}.stage{min-height:60vh}.jigs{border-left:0;border-top:1px solid var(--line)}}
+  </style>
+</head>
+<body>
+<header>
+  <div class="nav">
+    <div class="brand"><span class="mark">IB</span>INFERENCE BALLPARK</div>
+    <div class="nav-stats">
+      <span><b id="heroGpus">512 × GPU</b> 机群</span>
+      <span><b id="heroShape">64K → 400</b> 请求</span>
+      <span><b id="heroMode">Prefill</b> 路径</span>
+    </div>
+    <div class="stamp">ROOFLINE · PLAY PATH</div>
+  </div>
+</header>
+
+<div class="studio">
+  <section class="stage" id="architecture">
+    <div class="stage-head">
+      <div>
+        <div class="kicker" id="chapterKicker">PREFILL</div>
+        <h2 id="chapterTitle">miss tokens · [B, T, H]</h2>
+      </div>
+      <p class="hint" id="graphCaption"></p>
+    </div>
+    <div class="stage-legend">
+      <span class="zoomjig">
+        <button type="button" id="zoomFit">适应</button>
+        <button type="button" id="zoomOut">−</button>
+        <b id="zoomPct">100%</b>
+        <button type="button" id="zoomIn">+</button>
+      </span>
+      <span><i class="swatch" style="background:#c9f36a"></i>activation</span>
+      <span><i class="swatch" style="background:#5574ff"></i>weight</span>
+      <span><i class="swatch" style="background:#a67cff"></i>op</span>
+      <span><i class="swatch" style="background:#ff8d5b"></i>cache</span>
+      <span><i class="swatch" style="background:#ff806c"></i>comm</span>
+      <span><i class="swatch" style="background:#83b8ff"></i>module</span>
+    </div>
+    <div class="walkthrough-stage-scroll">
+      <svg id="walkthroughSvg" class="walkthrough" role="img" aria-label="模型单元架构图"></svg>
+    </div>
+  </section>
+
+  <aside class="jigs" id="jigs">
+    <div class="jigs-play">
+      <button type="button" class="play-btn" id="playBtn">▶ 播放完整推理路径</button>
+      <div class="play-row">
+        <button type="button" id="pauseBtn">暂停</button>
+        <button type="button" id="stepBtn">下一步</button>
+        <button type="button" id="resetBtn">重来</button>
+      </div>
+      <div class="play-meter"><span id="playBar"></span></div>
+      <div class="play-status">
+        <span id="playStatus">Prefill → Decode</span>
+        <b id="pathClock">层内 0</b>
+      </div>
+      <div class="field" style="margin-top:10px">
+        <label>播放速度 <span id="speedOut">1.0×</span></label>
+        <input id="playSpeed" type="range" min="4" max="24" value="10">
+      </div>
+    </div>
+
+    <div class="jig">
+      <h3>模型与层</h3>
+      <div class="model-tabs" id="modelTabs"></div>
+      <div class="mode-tabs" style="margin-top:8px">
+        <button type="button" class="mode active" data-mode="prefill">Prefill</button>
+        <button type="button" class="mode" data-mode="decode">Decode</button>
+        <span id="k3Branch" hidden>
+          <button type="button" class="mode active" data-branch="kda">KDA 层</button>
+          <button type="button" class="mode" data-branch="mla">Gated MLA 层</button>
+        </span>
+      </div>
+    </div>
+
+    <div class="jig inspector" id="inspector">
+      <div class="kind" id="nodeKind">NODE</div>
+      <h4 id="nodeTitle">选择一个节点</h4>
+      <dl>
+        <dt>Shape</dt><dd id="nodeShape">—</dd>
+        <dt>Op</dt><dd id="nodeOp">—</dd>
+        <dt>FLOPs</dt><dd id="nodeFlops">—</dd>
+        <dt>读</dt><dd id="nodeRead">—</dd>
+        <dt>写</dt><dd id="nodeWrite">—</dd>
+        <dt>通信</dt><dd id="nodeComm">—</dd>
+        <dt>时间</dt><dd id="nodeTime">—</dd>
+        <dt>瓶颈</dt><dd id="nodeBound">—</dd>
+      </dl>
+      <p id="nodeDetail"></p>
+      <div class="sources-inline" id="graphSources"></div>
+    </div>
+
+    <div class="jig">
+      <h3>请求</h3>
+      <div class="field"><label>输入长度 <span id="inputOut">64K</span></label><input id="input" type="range" min="8" max="128" step="8" value="64"></div>
+      <div class="field"><label>输出长度 <span id="outputOut">400</span></label><input id="output" type="range" min="32" max="2048" step="8" value="400"></div>
+      <div class="field"><label>KV cache hit <span id="cacheOut">70%</span></label><input id="cache" type="range" min="0" max="90" value="70"></div>
+      <div class="field"><label>Batch <span id="batchOut">8</span></label><input id="batch" type="range" min="1" max="128" value="8"></div>
+      <div class="pipeline">
+        <span class="chip">template</span>
+        <span class="chip">tokenize</span>
+        <span class="chip on" id="pipePrefill">prefill</span>
+        <span class="chip">write cache</span>
+        <span class="chip">sample</span>
+        <span class="chip" id="pipeDecode">decode</span>
+        <span class="chip">stream</span>
+      </div>
+    </div>
+
+    <div class="jig">
+      <h3>吞吐</h3>
+      <div class="metrics">
+        <div class="metric"><span>TTFT</span><b id="ttftOut">—</b><small>prefill · miss 段</small></div>
+        <div class="metric"><span>TPOT</span><b id="tpotOut">—</b><small>decode · 每 token</small></div>
+        <div class="metric"><span>tok/s / GPU</span><b id="tpsOut">—</b><small id="tpsUnit">output</small></div>
+        <div class="metric"><span>集群 TPM</span><b id="tpmOut">—</b><small>output / min</small></div>
+        <div class="metric"><span>瓶颈</span><b id="bottleneckOut">—</b><small id="boundLayer">当前路径</small></div>
+        <div class="metric"><span>KV / Batch</span><b id="kvOut">—</b><small id="kvNote">显存</small></div>
+      </div>
+      <p class="hint" style="margin-top:8px" id="measuredNote"></p>
+      <div style="overflow:auto;margin-top:8px">
+        <table>
+          <thead>
+            <tr><th>模型</th><th>TTFT</th><th>TPOT</th><th>TPM</th></tr>
+          </thead>
+          <tbody id="compareBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <details class="jig" open>
+      <summary>硬件与拓扑</summary>
+      <div class="jig-body">
+        <div class="grid-3">
+          <div class="field"><label>节点</label><input id="nodes" type="number" min="1" max="1024" value="64"></div>
+          <div class="field"><label>GPU/节点</label><input id="gpn" type="number" min="1" max="16" value="8"></div>
+          <div class="field"><label>FP8 TFLOPS</label><input id="compute" type="number" min="1" value="1979"></div>
+          <div class="field"><label>HBM TB/s</label><input id="hbm" type="number" min="0.1" step="0.1" value="4.8"></div>
+          <div class="field"><label>HBM GB</label><input id="hbmCap" type="number" min="8" value="141"></div>
+          <div class="field"><label>跨节点 GB/s</label><input id="network" type="number" min="1" value="50"></div>
+          <div class="field"><label>网络 %</label><input id="neteff" type="number" min="1" max="100" value="75"></div>
+          <div class="field"><label>实现 %</label><input id="efficiency" type="number" min="10" max="100" value="45"></div>
+          <div class="field"><label>TP</label><input id="tp" type="number" min="1" max="64" value="8"></div>
+          <div class="field"><label>EP</label><input id="ep" type="number" min="1" max="256" value="8"></div>
+          <div class="field"><label>PP</label><input id="pp" type="number" min="1" max="16" value="1"></div>
+          <div class="field"><label>Serving</label>
+            <select id="servingMode">
+              <option value="aggregated">聚合</option>
+              <option value="disaggregated" selected>分离 P:D</option>
+            </select>
+          </div>
+          <div class="field"><label>P</label><input id="pdP" type="number" min="0" max="64" value="1"></div>
+          <div class="field"><label>D</label><input id="pdD" type="number" min="0" max="64" value="1"></div>
+          <div class="field"><label>MTP</label><input id="mtpAccept" type="number" min="0.25" max="8" step="0.05" value="1"></div>
+          <div class="field"><label>对照 tok/s</label><input id="measuredTps" type="number" min="0" step="0.01" value="" placeholder="可选"></div>
+        </div>
+        <p class="hint" style="margin-top:8px">四个模型共用这份机群。切模型不再改写 TP/EP。EP&gt;1 才显示 all-to-all。</p>
+      </div>
+    </details>
+
+    <details class="jig">
+      <summary>来源与边界</summary>
+      <div class="jig-body">
+        <ol class="sources-list">
+          <li><a href="https://huggingface.co/zai-org/GLM-5.2/raw/main/config.json">GLM-5.2 config</a> · MLA + DSA Top-2048、IndexShare、Top-8/256 MoE。</li>
+          <li><a href="https://huggingface.co/moonshotai/Kimi-K3/raw/main/config.json">Kimi K3 config</a> · 69 KDA + 24 Gated MLA、LatentMoE Top-16/896。</li>
+          <li><a href="https://huggingface.co/moonshotai/Kimi-K2.5">Kimi K2.5</a> · Decode KV 按 absorbed 512+64。</li>
+          <li><a href="https://huggingface.co/MiniMaxAI/MiniMax-M3/raw/main/config.json">MiniMax M3</a> · Top-16 × 128-token blocks，前 3 层 dense。</li>
+          <li>实测锚点只作对照，不替换 roofline。</li>
+        </ol>
+      </div>
+    </details>
+  </aside>
+</div>
+
+<script src="js/models.js"></script>
+<script src="js/model-graphs.js"></script>
+<script src="js/roofline.js"></script>
+<script src="js/walkthrough.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
