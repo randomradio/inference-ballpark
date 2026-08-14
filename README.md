@@ -8,6 +8,17 @@ python3 -m http.server 8000
 
 然后打开 <http://localhost:8000>。
 
+## 部署（Cloudflare Pages）
+
+无构建，纯静态。把 `index.html` 和 `js/` 拷进一个干净目录再上传（避免把仓库文档发上去）。`wrangler.toml` 已配好项目名与 `pages_build_output_dir = .deploy`：
+
+```bash
+rm -rf .deploy && mkdir .deploy && cp index.html .deploy/ && cp -r js .deploy/js
+npx wrangler@latest pages deploy --branch=main
+```
+
+需要环境变量 `CLOUDFLARE_API_TOKEN` 和 `CLOUDFLARE_ACCOUNT_ID`。首次建项目：`npx wrangler pages project create inference-ballpark --production-branch=main`。自定义域名在 Cloudflare 面板（Pages → Custom domains）绑定，或建一条代理 CNAME 指向 `inference-ballpark.pages.dev`。线上：<https://inference-viz.latentvibe.com>。
+
 ## 做什么
 
 页面从左到右是架构和配置；**吞吐结果在底部抽屉**，默认收起只露出关键数字，点底栏或按 Esc 展开/收起。改请求或硬件，底栏 TTFT / TPOT / tok/s / TPM 立刻变。
