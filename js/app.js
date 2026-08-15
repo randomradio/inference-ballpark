@@ -48,6 +48,36 @@
     return models.find((item) => item.id === selectedId) || models[0];
   }
 
+  const HW_PRESETS = [
+    {
+      id: "h200-8",
+      name: "H200 · 8 卡/节点",
+      nodes: 1,
+      gpn: 8,
+      compute: 1979,
+      computeFp4: 0,
+      computeBf16: 0,
+      hbm: 4.8,
+      hbmCap: 141,
+      nvlink: 0.9,
+      network: 50,
+    },
+    {
+      id: "rubin-nvl72",
+      name: "Vera Rubin NVL72",
+      nodes: 1,
+      gpn: 72,
+      compute: 17500,
+      computeFp4: 50000,
+      computeBf16: 4000,
+      hbm: 22,
+      hbmCap: 288,
+      nvlink: 3.6,
+      network: 400,
+    },
+  ];
+  let selectedHwPreset = "h200-8";
+
   const CACHE_LABEL = {
     "mla-compressed": "compressed KV",
     "hybrid-kda-mla": "KDA state + MLA KV",
@@ -84,6 +114,11 @@
       hbmCapBytes: Math.max(8, +$("#hbmCap").value) * 1e9,
       netPerGpu: Math.max(1, +$("#network").value) * 1e9 * neteff,
       intraPerGpu: Math.max(0.1, +$("#nvlink").value) * 1e12 * neteff,
+      peaks: {
+        fp8: Math.max(1, +$("#compute").value || 1),
+        fp4: Math.max(0, +$("#computeFp4").value || 0),
+        bf16: Math.max(0, +$("#computeBf16").value || 0),
+      },
     };
   }
 
@@ -330,6 +365,43 @@
     }
     $("#pathClock").textContent = `层内 ${fmtTime(layerClock)}`;
     $("#speedOut").textContent = `${playSpeed().toFixed(1)}×`;
+  }
+
+  function applyHwPreset(preset, renderAfter = true) {
+    selectedHwPreset = preset.id;
+    $("#nodes").value = preset.nodes;
+    $("#gpn").value = preset.gpn;
+    $("#compute").value = preset.compute;
+    $("#computeFp4").value = preset.computeFp4;
+    $("#computeBf16").value = preset.computeBf16;
+    $("#hbm").value = preset.hbm;
+    $("#hbmCap").value = preset.hbmCap;
+    $("#nvlink").value = preset.nvlink;
+    $("#network").value = preset.network;
+    syncHwPresetButtons();
+    if (renderAfter) render();
+  }
+
+  function syncHwPresetButtons() {
+    const el = $("#hwPresets");
+    if (!el) return;
+    el.querySelectorAll("[data-hw]").forEach((button) => {
+      button.classList.toggle("active", button.dataset.hw === selectedHwPreset);
+    });
+  }
+
+  function renderHwPresets() {
+    const el = $("#hwPresets");
+    if (!el) return;
+    el.innerHTML = HW_PRESETS.map((preset) => (
+      `<button type="button" class="mode${preset.id === selectedHwPreset ? " active" : ""}" data-hw="${preset.id}">${preset.name}</button>`
+    )).join("");
+    el.querySelectorAll("[data-hw]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const preset = HW_PRESETS.find((item) => item.id === button.dataset.hw);
+        if (preset) applyHwPreset(preset);
+      });
+    });
   }
 
   function renderTabs() {
@@ -617,6 +689,7 @@
 
   try {
     renderTabs();
+    renderHwPresets();
     bindModes();
     bindDrawer();
     bindPlay();

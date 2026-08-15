@@ -212,10 +212,13 @@
     <details class="jig" open>
       <summary>机群硬件</summary>
       <div class="jig-body">
+        <div class="mode-tabs" id="hwPresets" style="margin-bottom:10px"></div>
         <div class="grid-3">
           <div class="field"><label>节点</label><input id="nodes" type="number" min="1" max="1024" value="1"></div>
-          <div class="field"><label>GPU/节点</label><input id="gpn" type="number" min="1" max="16" value="8"></div>
+          <div class="field"><label>GPU/节点</label><input id="gpn" type="number" min="1" max="128" value="8"></div>
           <div class="field"><label>FP8 TFLOPS</label><input id="compute" type="number" min="1" value="1979"></div>
+          <div class="field"><label>NVFP4 TFLOPS</label><input id="computeFp4" type="number" min="0" value="0"></div>
+          <div class="field"><label>BF16 TFLOPS</label><input id="computeBf16" type="number" min="0" value="0"></div>
           <div class="field"><label>HBM TB/s</label><input id="hbm" type="number" min="0.1" step="0.1" value="4.8"></div>
           <div class="field"><label>HBM GB</label><input id="hbmCap" type="number" min="8" value="141"></div>
           <div class="field"><label>NVLink TB/s</label><input id="nvlink" type="number" min="0.1" step="0.1" value="0.9"></div>
@@ -224,7 +227,7 @@
           <div class="field"><label>MFU %</label><input id="efficiency" type="number" min="10" max="100" value="45"></div>
           <div class="field"><label>HBM %</label><input id="hbmeff" type="number" min="10" max="100" value="80"></div>
         </div>
-        <p class="hint" style="margin-top:8px">节点内集体走 NVLink，跨节点走 RoCE。MFU % 只打折 FLOPS；HBM % 打折带宽（decode 多为 HBM-bound）；互联 % 打折两条 fabric。</p>
+        <p class="hint" style="margin-top:8px">节点内集体走 NVLink，跨节点走 RoCE。MFU % 只打折 FLOPS；HBM % 打折带宽（decode 多为 HBM-bound）；互联 % 打折两条 fabric。NVFP4=0 时 MXFP4 按 Hopper marlin（BF16 MAC）折算；Rubin 填 50000 吃原生 4-bit 峰值。BF16=0 时默认按 FP8/2。</p>
       </div>
     </details>
 
@@ -249,6 +252,7 @@
           <li><a href="https://docs.gpustack.ai/2.2/performance-lab/glm-5.2/h200/">GPUStack GLM-5.2 H200 lab</a> · 8 卡节点 TP8 + DeepEP，output 1945 tok/s。</li>
           <li><a href="https://huggingface.co/moonshotai/Kimi-K3/discussions/136">K3 16×H200 部署</a> · TP16+EP16 · 54 并发 146.9 tok/s 整机（未饱和）。</li>
           <li><a href="https://github.com/sgl-project/sglang/pull/28062">MiniMax M3 SGLang cookbook</a> · H200 BF16 热稳态约 116 tok/s/GPU。</li>
+          <li><a href="https://www.nvidia.com/en-us/data-center/vera-rubin-nvl72/">Vera Rubin NVL72</a> · 72×Rubin 同一 NVLink 6 域；单卡 NVFP4 50 / FP8 17.5 / BF16 4 PFLOPS，HBM4 288GB · 22 TB/s，NVLink 3.6 TB/s，scale-out 400 GB/s。</li>
         </ol>
       </div>
     </details>

@@ -31,9 +31,24 @@
       commIntra: c.commIntra * n,
     };
   };
-  // FP8 (1 byte) 吃满 FP8 峰值；BF16 (2B) 减半；INT4/MXFP4 (0.5B) 走
-  // marlin 解量化后按 BF16 MAC 跑，同样减半（H200 无原生 FP4）。
-  const fp8Eq = (bytes) => (bytes === 1 ? 1 : 2);
+  // 把各 dtype 的 FLOPs 折成「FP8 峰值当量」：T = flopsEq / (FP8_peak × MFU)。
+  // Hopper：无原生 FP4，MXFP4/INT4 走 marlin → 按 BF16（默认 FP8/2）。
+  // Rubin：MXFP4 吃 NVFP4 峰值（50 PFLOPS），BF16 吃 4 PFLOPS，FP8 吃 17.5 PFLOPS。
+  function flopScale(bytes, ctx) {
+    const peaks = ctx?.peaks || {};
+    const fp8 = peaks.fp8 || 0;
+    const b = bytes ?? 1;
+    if (b <= 0.5) {
+      if (peaks.fp4 > 0 && fp8 > 0) return fp8 / peaks.fp4;
+      if (peaks.bf16 > 0 && fp8 > 0) return fp8 / peaks.bf16;
+      return 2;
+    }
+    if (b >= 2) {
+      if (peaks.bf16 > 0 && fp8 > 0) return fp8 / peaks.bf16;
+      return 2;
+    }
+    return 1;
+  }
 
   function replicaGpus(hw) {
     const pp = Math.max(1, hw.pp || 1);
@@ -120,7 +135,7 @@
     const flops = 2 * B * T * dIn * dOut / p;
     return {
       flops,
-      flopsEq: flops * fp8Eq(wb),
+      flopsEq: flops * flopScale(wb, ctx),
       bytesRead: dIn * dOut * wb / w + B * T * dIn * aBytes / p,
       bytesWrite: (B * T * dOut * aBytes) / p,
       comm: 0,
@@ -166,7 +181,7 @@
     const flops = 4 * B * h * tq * tk * dHead;
     const bytesRead = B * h * tq * dHead * aBytes;
     const bytesWrite = B * h * tq * dHead * aBytes;
-    return { flops, flopsEq: flops * fp8Eq(ctx.attnWBytes ?? 1), bytesRead, bytesWrite, comm: 0 };
+    return { flops, flopsEq: flops * flopScale(ctx.attnWBytes ?? 1, ctx), bytesRead, bytesWrite, comm: 0 };
   }
 
   function placeBytes(ctx, bytes, fabric) {
@@ -529,6 +544,7 @@
       tpFabric: plan.tpFabric,
       epFabric: plan.epFabric,
       cacheKind: model.cacheKind,
+      peaks: hw.peaks || {},
     };
   }
 
@@ -645,7 +661,10 @@
       layout,
       attnMode,
     });
-    let world = gpn;
+    // 8 卡节点从节点宽度起搜，保持 H200 对照；NVL72 这类大 NVLink 域
+    // 从 1 卡起搜最小能装下的 replica，再往整机里叠份数（算总体 TPM）。
+    const rackScale = gpn >= 32;
+    let world = rackScale ? 1 : gpn;
     let pp = 1;
     let cur = pack(world, pp);
     const weightsOf = (s) => weightBytesPerGpu(model, s.tp, s.ep, s.pp);
@@ -660,13 +679,18 @@
     const replica = replicaGpus(cur);
     const nodes = Math.max(1, Math.ceil(replica / gpn));
     const onNode = Math.max(cur.tp, cur.ep) <= gpn;
+    const clusterGpus = Math.max(1, (cluster.nodes || 1) * gpn);
+    const packs = Math.max(1, Math.floor(clusterGpus / replica));
+    const packNote = rackScale && onNode && packs > 1
+      ? ` · 整机 ${clusterGpus} 卡可放 ${packs} 份`
+      : "";
     const why = preferTpAttn
       ? (onNode
-        ? `KDA ${d.kdaLayers}/${d.layers} 层 → Attention 走 TP · replica ${replica} 卡 / ${nodes} 节点 · TP=${cur.tp}∩EP=${cur.ep}`
+        ? `KDA ${d.kdaLayers}/${d.layers} 层 → Attention 走 TP · replica ${replica} 卡 / ${nodes} 节点 · TP=${cur.tp}∩EP=${cur.ep}${packNote}`
         : `KDA 为主，单节点 ${gpn} 卡装不下权重 · replica 占 ${nodes} 个节点（TP${cur.tp}∩EP${cur.ep}）`)
       : (onNode
         ? (cur.pp === 1
-          ? `单节点 ${gpn} 卡 · TP${cur.tp} 切 dense/MLA · EP${cur.ep} DeepEP · Attention DP 切 KV`
+          ? `单节点 ${gpn} 卡 · TP${cur.tp} 切 dense/MLA · EP${cur.ep} DeepEP · Attention DP 切 KV${packNote}`
           : `单节点仍装不下全部权重，PP=${cur.pp} · replica 占 ${nodes} 个节点`)
         : `单节点 ${gpn} 卡装不下权重，replica 占 ${nodes} 个节点 · EP=${cur.ep}`);
     return { ...cur, nodes, servingMode: "aggregated", pdP: 1, pdD: 1, why };
@@ -692,5 +716,6 @@
     suggestPlacement,
     kvBytesPerSequence,
     weightBytesPerGpu,
+    flopScale,
   };
 }());
