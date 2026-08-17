@@ -258,6 +258,7 @@
     layerClock = 0;
     mode = "prefill";
     activeNodeId = "hidden_in";
+    zoom = "fit";
     syncModeButtons();
     render();
   }
@@ -391,11 +392,11 @@
       render();
     });
     $("#zoomIn").addEventListener("click", () => {
-      zoom = Math.min(1.6, (typeof zoom === "number" ? zoom : currentScale) + 0.15);
+      zoom = Math.min(4, (typeof zoom === "number" ? zoom : currentScale) * 1.25);
       render();
     });
     $("#zoomOut").addEventListener("click", () => {
-      zoom = Math.max(0.25, (typeof zoom === "number" ? zoom : currentScale) - 0.15);
+      zoom = Math.max(0.05, (typeof zoom === "number" ? zoom : currentScale) / 1.25);
       render();
     });
     $("#playSpeed").addEventListener("input", () => {
@@ -583,6 +584,12 @@
       mode,
       ctx,
       zoom,
+      dims: model.dims,
+      modelId: model.id,
+      onZoom: (next) => {
+        zoom = next;
+        render();
+      },
       layerNote: model.id === "kimi-k3"
         ? `${model.dims.kdaLayers} KDA + ${model.dims.mlaLayers} MLA`
         : `× ${model.dims.layers} 层`,
