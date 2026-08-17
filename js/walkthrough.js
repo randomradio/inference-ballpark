@@ -1,16 +1,15 @@
 (function () {
   const kindColors = {
-    activation: "#c9f36a",
-    weight: "#5574ff",
-    operation: "#a67cff",
-    cache: "#ff8d5b",
-    communication: "#ff806c",
-    module: "#83b8ff",
+    activation: "#111",
+    weight: "#444",
+    operation: "#666",
+    cache: "#888",
+    communication: "#222",
+    module: "#555",
   };
-  // 复用现有 CSS 变量色值，不新增颜色
   const LAYER_KIND_COLORS = {
-    kda: "#184e3b", mla: "#ff8d5b", dense: "#83b8ff", moe: "#184e3b",
-    dsa: "#ff8d5b", share: "#c9f36a",
+    kda: "#111", mla: "#666", dense: "#bbb", moe: "#111",
+    dsa: "#666", share: "#ddd",
   };
 
   function escapeHtml(value) {
@@ -321,7 +320,7 @@
     const w = pxW(dims.H || 7168);
     const x = axis - w / 2;
     const parts = seq.map((kind, i) => (
-      `<rect class="walkthrough-slice" data-stack="1" x="${x}" y="${yTop + i * h}" width="${w}" height="${Math.max(1, h - 0.6)}" fill="${LAYER_KIND_COLORS[kind] || "#184e3b"}" />`
+      `<rect class="walkthrough-slice" data-stack="1" x="${x}" y="${yTop + i * h}" width="${w}" height="${Math.max(1, h - 0.6)}" fill="${LAYER_KIND_COLORS[kind] || "#111"}" />`
     ));
     const KIND_ORDER = ["dense", "dsa", "share", "kda", "mla", "moe"];
     const counts = seq.reduce((acc, kind) => {
@@ -533,28 +532,57 @@
       view.tx = (cw - layout.width * view.scale) / 2;
       view.ty = Math.max(16, Math.min(40, (ch - layout.height * view.scale) / 2));
     };
-    if (state.modelId !== lastModelId) {
+    const frameRect = (rect, pad = 56) => {
+      const w = Math.max(72, rect.maxX - rect.minX);
+      const h = Math.max(72, rect.maxY - rect.minY);
+      view.scale = Math.min(2.6, Math.max(0.12, Math.min((cw - pad * 2) / w, (ch - pad * 2) / h)));
+      view.tx = cw / 2 - ((rect.minX + rect.maxX) / 2) * view.scale;
+      view.ty = ch / 2 - ((rect.minY + rect.maxY) / 2) * view.scale;
+    };
+    const boxRect = (box) => ({
+      minX: box.x, minY: box.y, maxX: box.x + box.width, maxY: box.y + box.height,
+    });
+    if (state.modelId !== lastModelId && !state.panTarget) {
       lastModelId = state.modelId;
       lastActiveId = null;
       fitView();
-    } else if (state.zoom === "fit") {
+    } else if (state.zoom === "fit" && !state.panTarget) {
       fitView();
-    } else {
+    } else if (!state.panTarget) {
       view.scale = Math.min(4, Math.max(0.05, Number(state.zoom) || 1));
     }
+    if (state.modelId !== lastModelId) {
+      lastModelId = state.modelId;
+      lastActiveId = null;
+    }
 
-    // 选中变化或播放时，把激活节点平移到视口中心（替代旧的 window 滚动）
     const activeBox = layout.positions.get(activeNode?.id);
-    if (activeBox && state.autoScroll !== false
+    if (state.panTarget === "fit") {
+      fitView();
+    } else if (state.panTarget === "stack" && stackBox) {
+      frameRect(stackBox);
+    } else if (state.panTarget === "nodes") {
+      const boxes = (state.focusIds || [])
+        .map((id) => layout.positions.get(id))
+        .filter(Boolean);
+      if (boxes.length) {
+        frameRect({
+          minX: Math.min(...boxes.map((box) => box.x)) - 24,
+          minY: Math.min(...boxes.map((box) => box.y)) - 36,
+          maxX: Math.max(...boxes.map((box) => box.x + box.width)) + 24,
+          maxY: Math.max(...boxes.map((box) => box.y + box.height)) + 24,
+        });
+      } else if (activeBox) {
+        frameRect(boxRect(activeBox));
+      }
+    } else if (state.panTarget === "active" && activeBox) {
+      frameRect(boxRect(activeBox));
+    } else if (activeBox && state.autoScroll !== false
       && (playing || (lastActiveId !== null && activeNode.id !== lastActiveId))) {
       view.tx = cw / 2 - (activeBox.x + activeBox.width / 2) * view.scale;
       view.ty = ch / 2 - (activeBox.y + activeBox.height / 2) * view.scale;
     }
     if (activeNode) lastActiveId = activeNode.id;
-    if (state.panTarget === "stack" && stackBox) {
-      view.tx = cw / 2 - ((stackBox.minX + stackBox.maxX) / 2) * view.scale;
-      view.ty = ch / 2 - ((stackBox.minY + stackBox.maxY) / 2) * view.scale;
-    }
 
     const paths = [];
     nodes.forEach((item) => {
@@ -591,6 +619,7 @@
     });
 
     const groupMarkup = [];
+    const focusSet = new Set(state.focusIds || []);
     const blockGroups = [1, 2].filter((groupId) => groupBoxes.has(groupId));
     if (blockGroups.length) {
       // Frame around the repeated decoder block (attention + FFN).
@@ -601,6 +630,16 @@
       const maxY = Math.max(...boxes.map((b) => b.maxY)) + 18;
       groupMarkup.push(`<rect class="walkthrough-block-frame" x="${minX}" y="${minY}" width="${maxX - minX}" height="${maxY - minY}" rx="14" />`);
       groupMarkup.push(`<text class="walkthrough-block-label" x="${minX + 14}" y="${minY + 22}">DECODER LAYER · 代表层${state.layerNote ? ` · ${escapeHtml(state.layerNote)}` : ""}</text>`);
+    }
+    if (focusSet.size) {
+      const focusBoxes = [...focusSet].map((id) => layout.positions.get(id)).filter(Boolean);
+      if (focusBoxes.length) {
+        const minX = Math.min(...focusBoxes.map((box) => box.x)) - 18;
+        const minY = Math.min(...focusBoxes.map((box) => box.y)) - 28;
+        const maxX = Math.max(...focusBoxes.map((box) => box.x + box.width)) + 18;
+        const maxY = Math.max(...focusBoxes.map((box) => box.y + box.height)) + 18;
+        groupMarkup.push(`<rect class="walkthrough-chapter-frame" x="${minX}" y="${minY}" width="${maxX - minX}" height="${maxY - minY}" rx="10" />`);
+      }
     }
     const focusGroup = activeNode ? groupOf(activeNode) : null;
     groupBoxes.forEach((box, groupId) => {
@@ -616,15 +655,19 @@
     const nodeMarkup = nodes.map((item, index) => {
       const box = layout.positions.get(item.id);
       const g = box.geo;
-      const color = kindColors[item.kind] || "#c9f36a";
+      const color = kindColors[item.kind] || "#111";
       const selected = item.id === activeNode?.id;
       const upstream = activeUpstream.has(item.id);
+      const inChapter = focusSet.has(item.id);
       const done = visited.has(item.id) && !selected;
       const future = playing && orderIndex.get(item.id) > activeOrd && !selected && !upstream;
       const pending = playing && !selected && !done && !upstream && !future;
-      const dimmed = !playing && activeNode && !selected && !upstream;
+      const dimmed = !playing && (
+        focusSet.size ? !inChapter && !selected : activeNode && !selected && !upstream
+      );
+      const chapter = !playing && inChapter && !selected;
       const hot = item.id === hotId && !playing;
-      const cls = `walkthrough-node tensor-${escapeHtml(item.kind)}${selected ? " is-selected" : ""}${upstream ? " is-upstream" : ""}${done ? " is-done" : ""}${pending ? " is-pending" : ""}${future ? " is-future" : ""}${dimmed ? " is-dimmed" : ""}${hot ? " is-hot" : ""}`;
+      const cls = `walkthrough-node tensor-${escapeHtml(item.kind)}${selected ? " is-selected" : ""}${upstream ? " is-upstream" : ""}${done ? " is-done" : ""}${pending ? " is-pending" : ""}${future ? " is-future" : ""}${dimmed ? " is-dimmed" : ""}${chapter ? " is-chapter" : ""}${hot ? " is-hot" : ""}`;
       const aria = escapeHtml(`${item.label}, ${resolveShape(item.shape, ctx)}`);
 
       const sheetCount = g.stack > 1 ? Math.min(3, g.stack - 1) : 0;
@@ -683,7 +726,7 @@
           <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
         </marker>
         <pattern id="tensorGrid" width="12" height="10" patternUnits="userSpaceOnUse">
-          <path d="M 12 0 L 0 0 0 10" fill="none" stroke="rgba(21,35,30,.10)" stroke-width="1" />
+          <path d="M 12 0 L 0 0 0 10" fill="none" stroke="rgba(0,0,0,.10)" stroke-width="1" />
         </pattern>
       </defs>
       <g class="walkthrough-viewport" transform="translate(${view.tx} ${view.ty}) scale(${view.scale})">

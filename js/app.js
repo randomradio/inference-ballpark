@@ -525,7 +525,15 @@
   function applyExplainItem(item) {
     stopPlay();
     explainId = item.id;
-    if (item.id === "layers") panTarget = "stack";
+    if (item.id === "layers") {
+      panTarget = "stack";
+    } else if (item.id === "read" || item.id === "overview" || item.id === "prefill" || item.id === "decode") {
+      panTarget = "fit";
+    } else if (item.nodeIds && item.nodeIds.length) {
+      panTarget = "nodes";
+    } else {
+      panTarget = "active";
+    }
     if (item.id === "prefill" || item.id === "decode") {
       mode = item.id;
       visited = new Set();
@@ -780,6 +788,7 @@
       },
       layerNote: layerNoteOf(model),
       panTarget,
+      focusIds: currentToc(model, nodes, state.hw).find((item) => item.id === explainId)?.nodeIds || [],
       activeId: activeNodeId,
       hotId,
       visitedIds: visited,
@@ -807,6 +816,8 @@
       },
     });
 
+    if (panTarget && panTarget !== "fit" && drawn?.scale) zoom = drawn.scale;
+    if (panTarget === "fit") zoom = "fit";
     panTarget = null;
     currentScale = drawn?.scale || 1;
     $("#zoomPct").textContent = `${Math.round(currentScale * 100)}%`;
