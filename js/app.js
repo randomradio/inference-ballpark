@@ -455,6 +455,16 @@
     }
   }
 
+  function layerNoteOf(model) {
+    const d = model.dims;
+    if (d.kdaLayers) return `${d.kdaLayers} KDA + ${d.mlaLayers} MLA`;
+    if (d.indexShareGroup) {
+      return `${d.denseLayers} dense · IndexShare /${d.indexShareGroup} · ${d.moeLayers} MoE`;
+    }
+    if (d.denseLayers) return `${d.denseLayers} dense + ${d.moeLayers} MoE`;
+    return `× ${d.layers} 层`;
+  }
+
   function currentToc(model, nodes, hw) {
     return window.BallparkExplain.buildToc(model, nodes, { mode, branch, ep: hw.ep });
   }
@@ -703,9 +713,7 @@
         zoom = next;
         render();
       },
-      layerNote: model.id === "kimi-k3"
-        ? `${model.dims.kdaLayers} KDA + ${model.dims.mlaLayers} MLA`
-        : `× ${model.dims.layers} 层`,
+      layerNote: layerNoteOf(model),
       activeId: activeNodeId,
       hotId,
       visitedIds: visited,

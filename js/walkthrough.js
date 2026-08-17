@@ -8,7 +8,10 @@
     module: "#83b8ff",
   };
   // 复用现有 CSS 变量色值，不新增颜色
-  const LAYER_KIND_COLORS = { kda: "#184e3b", mla: "#ff8d5b", dense: "#83b8ff", moe: "#184e3b" };
+  const LAYER_KIND_COLORS = {
+    kda: "#184e3b", mla: "#ff8d5b", dense: "#83b8ff", moe: "#184e3b",
+    dsa: "#ff8d5b", share: "#c9f36a",
+  };
 
   function escapeHtml(value) {
     return String(value ?? "")
@@ -281,8 +284,17 @@
       return seq;
     }
     const dense = dims.denseLayers || 0;
+    const group = dims.indexShareGroup || 0;
     const seq = [];
-    for (let i = 0; i < total; i += 1) seq.push(i < dense ? "dense" : "moe");
+    for (let i = 0; i < total; i += 1) {
+      if (i < dense) {
+        seq.push("dense");
+      } else if (group > 0) {
+        seq.push((i - dense) % group === 0 ? "dsa" : "share");
+      } else {
+        seq.push("moe");
+      }
+    }
     return seq;
   }
 
@@ -603,6 +615,6 @@
   }
 
   window.BallparkWalkthrough = {
-    render, visibleNodes, resolveShape, upstreamIds, topologicalOrder, nodeGeometry, groupOf, GROUP_LABELS,
+    render, visibleNodes, resolveShape, upstreamIds, topologicalOrder, nodeGeometry, groupOf, GROUP_LABELS, layerSequence,
   };
 }());

@@ -30,7 +30,7 @@
     title: "Prefill · miss tokens",
     what: "输入里 cache 未命中的一段 [B, T, H] 过完全部层，写入 KV 或 recurrent state，得到第一个输出 token。这段时间是 TTFT。",
     map: "激活盒子按 B×T 长高。Embedding 与 Output 各做一次；中间 Decoder 框重复 layers 次，图上只展开一层。",
-    phase: "T = T_in × (1 − hit)。命中段不重算，但仍按输入 token 计费。Kimi K3 要分别走 KDA 层与 Gated MLA 层。",
+    phase: "T = T_in × (1 − hit)。命中段不重算，但仍按输入 token 计费。混合 Attention 的模型按层类型分别走。",
     cost: "大 GEMM 和整段 Attention 吃 FLOPS。MoE 按本卡命中的 expert 整块读权重。跨节点 all-to-all 体积随 T 涨。",
   };
 
@@ -39,7 +39,7 @@
     title: "Decode · token 2+",
     what: "之后每个新 token 只走 [B, 1, H]，读并追加 cache。每步时间是 TPOT；集群 output tok/s ≈ B / TPOT。",
     map: "激活变矮。cache 仍按已生成长度 S 画。专家格仍然亮 Top-K，因为每步都要路由。",
-    phase: "不再扫整段输入。KDA 只更新固定 state；MLA / GQA 读长度为 S 的 KV。输出头仍只看最后一个位置。",
+    phase: "不再扫整段输入。带 KV 的层读长度为 S 的 cache。输出头只看最后一个位置。",
     cost: "行少，GEMM 常变成读权重。小 batch 时 MoE 每步整块读被命中的 expert，不随 batch 线性摊薄。长上下文时 KV 带宽往往决定 TPOT。",
   };
 
@@ -54,7 +54,7 @@
       what: `中间框是代表层。其下每条薄片是其余一层，颜色 = 层类型。${note}`,
       map: "薄片宽度 = 隐层 H。点击薄片或本条目录，视口回到代表层。层数与种类来自模型 config，不是装饰。",
       phase: "Prefill 与 Decode 都要走完全部层。图上只算一层的代价，roofline 再乘层数（once 节点不乘）。",
-      cost: "总时间 ≈ 代表层 × 层数。Kimi K3 要把 KDA 层与 MLA 层分开加总。",
+      cost: "总时间 ≈ 代表层 × 层数。混合 Attention 的模型按层类型分别加总。",
     };
   }
 
@@ -76,6 +76,24 @@
         { id: "ep", section: "moe", title: "Expert parallel", nodeIds: ["dispatch", "all_to_all", "expert_compute", "gather"], epOnly: true },
         { id: "out", section: "out", title: "Output head", nodeIds: ["final_norm", "lm_head", "logits"] },
       ],
+      prefill: {
+        what: "miss 段 [B, T, 6,144] 过 78 层。MLA 写 compressed KV；DSA 写 indexer key。出第一个 token，时间是 TTFT。",
+        map: "激活按 B×T 画高。DSA 与 MLA 并行挂在中轴两侧。",
+        phase: "IndexShare 层跳过 indexer 打分，复用上一 full indexer 的 Top-2048。",
+        cost: "Prefill 主项是稀疏 MLA 与 MoE GEMM。IndexShare 去掉 3/4 层的 indexer FLOPs。",
+      },
+      decode: {
+        what: "当前 token [B, 1, 6,144]。读 compressed KV，只 attend DSA 选出的 2048 个位置。",
+        map: "激活变矮。KV cache 与 indexer key 仍按 S 画高。",
+        phase: "不读展开 K/V。IndexShare 层继续复用 indices。",
+        cost: "Decode 带宽按 576 维 latent。小 batch 时 MoE 读 8 个 FP8 expert 整块。",
+      },
+      layers: {
+        what: "代表层展开 DSA + MLA。薄片：前 3 层 dense FFN（蓝），其后每 4 层 1 个 full indexer（橙），3 层 IndexShare（绿）。",
+        map: "薄片宽 = 6,144。橙 = 算满 indexer，绿 = 复用 Top-K。",
+        phase: "78 层都走。IndexShare 只改 Attention 的 indexer，不改 MoE。",
+        cost: "roofline 按 full / share 两种 Attention 分别乘层数，再加 3 层 dense FFN + 75 层 MoE。",
+      },
       pages: {
         embed: {
           kicker: "EMBEDDING",
@@ -127,11 +145,53 @@
         },
       },
       nodes: {
+        q_a: {
+          what: "Q 先压到 2,048。这份 latent 同时喂给 Q up 和 DSA indexer。",
+          map: "6,144 × 2,048 矩阵。比主干窄。",
+          phase: "Prefill 对整段 T。Decode 对 1。",
+          cost: "一次 GEMM。后面的 indexer 和 Q up 都依赖它。",
+        },
+        index_q: {
+          what: "独立的 32 头 indexer query，从 Q latent 再投影。",
+          map: "叠 32 片，每片 128 维。",
+          phase: "IndexShare 层跳过。",
+          cost: "比主 Q up 便宜。full indexer 层才算。",
+        },
+        index_k: {
+          what: "轻量 index key，128 维，head 共享。Prefill 写入 indexer cache。",
+          map: "高随 S，宽 128。没有头叠片。",
+          phase: "Prefill 写 miss 段。Decode 读 S、追加 1。",
+          cost: "字节小。scores 才随 S 涨。",
+        },
+        index_scores: {
+          what: "32 头加权 QKᵀ，给每个历史位置打分。",
+          map: "高随 T×S。IndexShare 层不画这条计算。",
+          phase: "Prefill 对 miss 段每个 query。Decode 一个 query 对 S。",
+          cost: "随 S 线性。IndexShare 把 3/4 层的这笔去掉。",
+        },
+        index_topk: {
+          what: "每 query 留 Top-2048，其余 mask 成 −∞。",
+          map: "indices 盒，不是大激活。",
+          phase: "full indexer 层现算；IndexShare 层改读 cache。",
+          cost: "几乎不进 roofline。",
+        },
         index_share: {
           what: "把上一 full indexer 的 Top-2048 indices 复用到本层。不重新打分。",
           map: "橙 cache，形状与 Top-K indices 相同。",
           phase: "Prefill / Decode 都读。本层若是 full indexer 则走左边的计算路径。",
           cost: "几乎只有一次小读取。省掉 3/4 稀疏层的 indexer FLOPs。",
+        },
+        q_up: {
+          what: "2,048 → 64×256（192 NoPE + 64 RoPE）。主 MLA 的 query。",
+          map: "宽矩阵。64 头在 Sparse MLA 上叠片，不在这里。",
+          phase: "每层都做。",
+          cost: "Prefill 吃 FLOPS。Decode 读权重。",
+        },
+        kv_down: {
+          what: "6,144 → 576：512 compressed KV + 64 RoPE key。",
+          map: "窄矩阵。写出的 cache 宽 576。",
+          phase: "Prefill 写。Decode 只追加 1。",
+          cost: "一次小 GEMM。后面的 cache 读才是大头。",
         },
         kv_cache: {
           what: "Compressed KV：512 latent + 64 RoPE key。这是 Decode 读历史的唯一入口。",
@@ -139,11 +199,29 @@
           phase: "Prefill 写入 miss 段。Decode 读 S，并追加当前 token。",
           cost: "Decode 读字节 = B × S × 576 × dtype。长上下文时这是 Attention 的带宽项。",
         },
+        kv_up: {
+          what: "512 → 64×448，展开 NoPE key 与 value。",
+          map: "宽矩阵。Decode 可吸进 kernel。",
+          phase: "Prefill 显式展开。Decode 常和 Attention 合成。",
+          cost: "算力随 T。带宽按展开后计还是按 latent 计，本工具 Decode 按 latent。",
+        },
         sparse_attention: {
           what: "64 头 MLA，mask 掉 DSA 未选中的位置，只对 Top-2048 做 QKᵀ→V。",
           map: "叠 64 片。高随 T，宽是 head dim。",
           phase: "Prefill 对 miss 段每个 query 选 2048。Decode 一个 query 对历史 2048。",
           cost: "计算从 O(T×S) 收到 O(T×2048)。仍要加上 KV 展开的 GEMM。",
+        },
+        routed_experts: {
+          what: "256 个 SwiGLU 里激活 8 个。6,144→2,048→6,144。",
+          map: "格点 = expert，亮 8 / 256。",
+          phase: "每步重选。",
+          cost: "小 batch Decode 读 min(B×8/EP, 256/EP) 个 FP8 expert 整块。",
+        },
+        shared_expert: {
+          what: "1 个始终执行的 SwiGLU，不受 Top-K 影响。",
+          map: "单片，与 routed 同宽。",
+          phase: "每个 token 都算。",
+          cost: "必付。相对 8 个 routed 小。",
         },
       },
     },
@@ -298,6 +376,24 @@
         { id: "ep", section: "moe", title: "Expert parallel", nodeIds: ["dispatch", "all_to_all", "expert_compute", "gather"], epOnly: true },
         { id: "out", section: "out", title: "Output head", nodeIds: ["final_norm", "lm_head", "logits"] },
       ],
+      prefill: {
+        what: "miss 段 [B, T, 7,168] 过 61 层。MLA 写 compressed KV。出第一个 token，时间是 TTFT。",
+        map: "激活按 B×T 画高。MLA 在左，专家格 384 亮 8。",
+        phase: "首层 FFN 是 dense，其余 60 层 MoE。Attention 每层都是满 MLA。",
+        cost: "Prefill 主项是 MLA GEMM 与 INT4 routed experts。",
+      },
+      decode: {
+        what: "当前 token [B, 1, 7,168]。读 absorbed 512+64 KV，不按 Hugging Face 展开 K/V 计带宽。",
+        map: "激活变矮。cache 仍按 S×576。",
+        phase: "KV up 可吸进 kernel。Router 每步重选 8 个 expert。",
+        cost: "长上下文时 MLA cache 是 Attention 主项。小 batch 时读 8 个 INT4 expert。",
+      },
+      layers: {
+        what: "代表层展开 MLA + MoE。薄片：第 1 层 dense FFN（蓝），其余 60 层 MoE（绿）。",
+        map: "薄片宽 = 7,168。没有 KDA/MLA 交错，Attention 种类单一。",
+        phase: "61 层都走满 MLA。只有 FFN 在第 1 层换成 dense。",
+        cost: "Attention × 61 + dense FFN × 1 + MoE × 60。",
+      },
       pages: {
         embed: {
           kicker: "EMBEDDING",
@@ -341,11 +437,53 @@
         },
       },
       nodes: {
+        q_down: {
+          what: "Q LoRA：7,168 → 1,536。",
+          map: "窄矩阵。后面 Q up 再升到 64 头。",
+          phase: "每层、每个 token。",
+          cost: "一次 GEMM。Prefill 吃算力，Decode 吃读权重。",
+        },
+        q_up: {
+          what: "1,536 → 64×192（128 NoPE + 64 RoPE）。",
+          map: "宽矩阵。64 头叠在 MLA attention 上。",
+          phase: "每层都做。",
+          cost: "比 Q down 宽。Decode 读这份 BF16 权重。",
+        },
+        kv_down: {
+          what: "7,168 → 512+64。compressed KV 与共享 RoPE key。",
+          map: "窄矩阵。写出 cache 宽 576。",
+          phase: "Prefill 写。Decode 追加 1。",
+          cost: "小 GEMM。后面 cache 读才随 S。",
+        },
         kv_cache: {
           what: "Serving 按 absorbed 512+64 计。Hugging Face reference 会缓存展开 K/V，本图不按那条计带宽。",
           map: "高 ∝ B×S，宽 576。",
           phase: "Prefill 写。Decode 读 S。",
           cost: "B × S × 576 × FP8。不要用展开后的 64×256 去估 Decode HBM。",
+        },
+        kv_up: {
+          what: "512 → 64×256，展开 Kᴺ 与 V。Decode 可吸收进 kernel。",
+          map: "宽矩阵。",
+          phase: "Prefill 显式。Decode 常不单独占一步 HBM。",
+          cost: "本工具 Decode 不把展开后的 K/V 再计一遍带宽。",
+        },
+        mla_attn: {
+          what: "64 头，NoPE 与 RoPE 子空间组合后做 QKᵀ→V。",
+          map: "叠 64 片。高随 T，宽随 S。",
+          phase: "Prefill 满 Attention。Decode 一个 query 对 S。",
+          cost: "FLOPs ∝ T×S×heads。带宽走 576 维 cache。",
+        },
+        routed_experts: {
+          what: "384 个 INT4 SwiGLU 里激活 8 个。7,168→2,048→7,168。",
+          map: "格点 = expert，亮 8 / 384。",
+          phase: "每步重选。",
+          cost: "INT4 只打 routed。小 batch Decode 读 8 个 expert 整块。",
+        },
+        shared_expert: {
+          what: "1 个始终执行的 BF16 SwiGLU。",
+          map: "单片。",
+          phase: "每个 token。",
+          cost: "BF16，不是 INT4。必付。",
         },
       },
     },
@@ -367,6 +505,24 @@
         { id: "ep", section: "moe", title: "Expert parallel", nodeIds: ["dispatch", "all_to_all", "expert_compute", "inverse_gather"], epOnly: true },
         { id: "out", section: "out", title: "Output head", nodeIds: ["final_norm", "lm_head", "logits"] },
       ],
+      prefill: {
+        what: "miss 段 [B, T, 6,144] 过 60 层。写全量 paged KV。Attention 只算 indexer 选出的块。出第一个 token，时间是 TTFT。",
+        map: "激活按 B×T。Indexer 叠 4 头。KV cache 叠 4 个 KV 头，高随 S。",
+        phase: "前 3 层 dense FFN + 满 GQA。其后 57 层 sparse GQA + MoE。",
+        cost: "Prefill 显存按全 S 涨。计算按 16×128+local，不按全 S。",
+      },
+      decode: {
+        what: "当前 token [B, 1, 6,144]。追加 1 页 KV，只 attend 选中的 16+local 块。",
+        map: "激活变矮。paged KV 仍按全 S 画高。",
+        phase: "显存全量；计算稀疏。Router 每步选 4 个 expert。",
+        cost: "长上下文先撞 KV 显存。小 batch 时 MoE 读 4 个 BF16 expert。",
+      },
+      layers: {
+        what: "代表层是 sparse GQA + MoE。薄片：前 3 层 dense（蓝），其余 57 层 MoE（绿）。",
+        map: "薄片宽 = 6,144。蓝层 Attention 仍是 GQA，只是 FFN 不走 MoE。",
+        phase: "60 层都写/读 paged KV。稀疏只作用于后 57 层的 Attention 计算。",
+        cost: "dense GQA × 3 + sparse GQA × 57 + dense FFN × 3 + MoE × 57。",
+      },
       pages: {
         embed: {
           kicker: "EMBEDDING",
@@ -418,17 +574,53 @@
         },
       },
       nodes: {
+        q_proj: {
+          what: "64 个 Q 头 × 128。主 Attention 的 query。",
+          map: "叠 64 片。",
+          phase: "每层都做。",
+          cost: "一次 GEMM。Prefill 吃算力，Decode 吃读权重。",
+        },
+        kv_proj: {
+          what: "4 个 KV 头 × 128。每 16 个 Q 共享 1 组 KV。",
+          map: "叠 4 片，比 Q 薄。",
+          phase: "Prefill 写入 paged cache。Decode 追加 1。",
+          cost: "小。显存大头在 cache，不在这份投影。",
+        },
         kv_cache: {
           what: "Paged GQA KV，按全量 S 占显存。计算不读未选中的页。",
           map: "高 ∝ B×S，叠 4 个 KV 头。",
           phase: "Prefill 写入全部 miss token。Decode 追加 1，读选中块。",
           cost: "显存 = B × S × 4 × 256 × BF16。这是 batch 上限，不是 FLOPs。",
         },
+        indexer: {
+          what: "Lightning indexer：4 头 × 128，给 128-token 的 KV 块打分。",
+          map: "叠 4 片。",
+          phase: "Prefill / Decode 都打分。",
+          cost: "比主 GQA 便宜。选出的块数固定。",
+        },
+        index_topk: {
+          what: "选 Top-16 个块，再加 1 个 local 块。稀疏单位是块。",
+          map: "indices，不是大激活。",
+          phase: "每个 query 一次。",
+          cost: "几乎不进 roofline。",
+        },
         sparse_gqa: {
           what: "64 头 GQA，只 attend indexer 选出的块。",
           map: "叠 64。宽 128。",
           phase: "Prefill / Decode 都只读选中块。",
           cost: "FLOPs ∝ T × (16×128 + local) × heads。与全量 S 解耦。",
+        },
+        routed_experts: {
+          what: "128 个 SwiGLU-OAI 里激活 4 个。6,144→3,072→6,144。",
+          map: "格点 = expert，亮 4 / 128。",
+          phase: "MoE 层每步重选。前 3 层没有这格。",
+          cost: "BF16。小 batch Decode 读 4 个 expert 整块。",
+        },
+        shared_expert: {
+          what: "1 个始终执行的 SwiGLU-OAI。",
+          map: "单片。",
+          phase: "MoE 层每个 token。",
+          cost: "必付。相对 4 个 routed 小。",
         },
       },
     },
