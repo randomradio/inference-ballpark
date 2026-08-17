@@ -298,8 +298,24 @@
     return seq;
   }
 
-  function layerStack(dims, axis, yTop) {
-    const seq = layerSequence(dims).slice(1);
+  // 中间框展开的那一层：K3 跟当前 KDA/MLA 开关；GLM 是 full DSA；其余是 MoE
+  function representedLayerKind(dims, branch) {
+    if (dims.kdaLayers) return branch === "mla" ? "mla" : "kda";
+    if (dims.indexShareGroup) return "dsa";
+    if (dims.moeLayers) return "moe";
+    return "dense";
+  }
+
+  function remainingLayers(dims, branch) {
+    const seq = layerSequence(dims);
+    const kind = representedLayerKind(dims, branch);
+    const index = seq.indexOf(kind);
+    if (index < 0) return seq.slice(1);
+    return seq.filter((_, i) => i !== index);
+  }
+
+  function layerStack(dims, axis, yTop, branch) {
+    const seq = remainingLayers(dims, branch);
     if (!seq.length) return null;
     const h = Math.min(6, Math.max(2, 240 / seq.length));
     const w = pxW(dims.H || 7168);
@@ -413,7 +429,7 @@
       const g3 = [...layout.positions.values()].filter((box) => box.group === 3);
       if (g3.length) {
         const g3Top = Math.min(...g3.map((box) => box.y));
-        const stack = layerStack(dims, layout.axis, g3Top + 12);
+        const stack = layerStack(dims, layout.axis, g3Top + 12, branch);
         if (stack) {
           const shift = stack.height;
           layout.positions.forEach((box) => {
@@ -615,6 +631,7 @@
   }
 
   window.BallparkWalkthrough = {
-    render, visibleNodes, resolveShape, upstreamIds, topologicalOrder, nodeGeometry, groupOf, GROUP_LABELS, layerSequence,
+    render, visibleNodes, resolveShape, upstreamIds, topologicalOrder, nodeGeometry, groupOf, GROUP_LABELS,
+    layerSequence, representedLayerKind, remainingLayers,
   };
 }());
