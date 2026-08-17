@@ -323,11 +323,19 @@
     const parts = seq.map((kind, i) => (
       `<rect class="walkthrough-slice" data-stack="1" x="${x}" y="${yTop + i * h}" width="${w}" height="${Math.max(1, h - 0.6)}" fill="${LAYER_KIND_COLORS[kind] || "#184e3b"}" />`
     ));
+    const KIND_ORDER = ["dense", "dsa", "share", "kda", "mla", "moe"];
     const counts = seq.reduce((acc, kind) => {
       acc[kind] = (acc[kind] || 0) + 1;
       return acc;
     }, {});
-    const breakdown = Object.entries(counts).map(([kind, n]) => `${n} ${kind.toUpperCase()}`).join(" + ");
+    const breakdown = Object.entries(counts)
+      .sort((a, b) => {
+        const ra = KIND_ORDER.indexOf(a[0]);
+        const rb = KIND_ORDER.indexOf(b[0]);
+        return (ra < 0 ? 50 : ra) - (rb < 0 ? 50 : rb);
+      })
+      .map(([kind, n]) => `${n} ${kind.toUpperCase()}`)
+      .join(" + ");
     const height = seq.length * h;
     const note = `<text class="walkthrough-stack-note" data-stack="1" x="${x + w + 16}" y="${yTop + height / 2}">其余 ${seq.length} 层 · ${breakdown}</text>`;
     return { markup: parts.join("") + note, height: height + 48 };
@@ -425,6 +433,7 @@
     // 全模型柱：把 OUTPUT HEAD 组下移，在代表层与输出头之间插入压缩层堆
     let stackMarkup = "";
     let blockFrameTop = null;
+    let stackBox = null;
     if (dims.layers > 1) {
       const g3 = [...layout.positions.values()].filter((box) => box.group === 3);
       if (g3.length) {
@@ -432,6 +441,13 @@
         const stack = layerStack(dims, layout.axis, g3Top + 12, branch);
         if (stack) {
           const shift = stack.height;
+          const stackW = pxW(dims.H || 7168);
+          stackBox = {
+            minX: layout.axis - stackW / 2,
+            minY: g3Top + 12,
+            maxX: layout.axis + stackW / 2 + 220,
+            maxY: g3Top + 12 + stack.height,
+          };
           layout.positions.forEach((box) => {
             if (box.y >= g3Top) box.y += shift;
           });
@@ -471,6 +487,10 @@
       view.ty = ch / 2 - (activeBox.y + activeBox.height / 2) * view.scale;
     }
     if (activeNode) lastActiveId = activeNode.id;
+    if (state.panTarget === "stack" && stackBox) {
+      view.tx = cw / 2 - ((stackBox.minX + stackBox.maxX) / 2) * view.scale;
+      view.ty = ch / 2 - ((stackBox.minY + stackBox.maxY) / 2) * view.scale;
+    }
 
     const paths = [];
     nodes.forEach((item) => {

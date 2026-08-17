@@ -14,6 +14,7 @@
   let zoom = "fit";
   let currentScale = 1;
   let explainId = "overview";
+  let panTarget = null;
 
   const fmt = (n, d = 1) => n.toLocaleString("en-US", { maximumFractionDigits: d });
   const compact = (n) => {
@@ -369,6 +370,7 @@
         branch = button.dataset.branch;
         visited = new Set();
         layerClock = 0;
+        if (explainId === "layers") panTarget = "stack";
         syncModeButtons();
         render();
       });
@@ -472,6 +474,7 @@
   function applyExplainItem(item) {
     stopPlay();
     explainId = item.id;
+    if (item.id === "layers") panTarget = "stack";
     if (item.id === "prefill" || item.id === "decode") {
       mode = item.id;
       visited = new Set();
@@ -714,6 +717,7 @@
         render();
       },
       layerNote: layerNoteOf(model),
+      panTarget,
       activeId: activeNodeId,
       hotId,
       visitedIds: visited,
@@ -741,6 +745,7 @@
       },
     });
 
+    panTarget = null;
     currentScale = drawn?.scale || 1;
     $("#zoomPct").textContent = `${Math.round(currentScale * 100)}%`;
 
