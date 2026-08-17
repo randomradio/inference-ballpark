@@ -397,7 +397,7 @@
 
   function formulaOf(item) {
     if (item.dIn && item.dOut) {
-      return { title: "GEMM", lines: [`${fmtNum(item.dIn)} × ${fmtNum(item.dOut)}`, "Y = X W"] };
+      return { title: "GEMM", lines: ["Y = X W"] };
     }
     if (item.stack && item.stackActive) {
       return { title: "MoE", lines: [`Top-${item.stackActive} / ${item.stack}`] };
