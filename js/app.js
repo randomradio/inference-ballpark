@@ -208,22 +208,30 @@
     );
   }
 
+  function playChapters() {
+    const model = selectedModel();
+    return model.id === "kimi-k3"
+      ? [
+        { mode: "prefill", branch: "kda", title: "Prefill · KDA 层", kicker: "PREFILL · KDA", tick: "P · KDA" },
+        { mode: "prefill", branch: "mla", title: "Prefill · Gated MLA 层", kicker: "PREFILL · MLA", tick: "P · MLA" },
+        { mode: "decode", branch: "kda", title: "Decode · KDA 层", kicker: "DECODE · KDA", tick: "D · KDA" },
+        { mode: "decode", branch: "mla", title: "Decode · Gated MLA 层", kicker: "DECODE · MLA", tick: "D · MLA" },
+      ]
+      : [
+        { mode: "prefill", branch: branch, title: "Prefill · miss tokens · [B, T, H]", kicker: "PREFILL", tick: "PREFILL" },
+        { mode: "decode", branch: branch, title: "Decode · token 2+ · [B, 1, H] + cache", kicker: "DECODE", tick: "DECODE" },
+      ];
+  }
+
+  function chapterKey(step) {
+    return `${step.mode}:${step.branch || ""}`;
+  }
+
   function buildPlayScript() {
     const model = selectedModel();
     const { hw } = readState();
-    const chapters = model.id === "kimi-k3"
-      ? [
-        { mode: "prefill", branch: "kda", title: "Prefill · KDA 层", kicker: "PREFILL · KDA" },
-        { mode: "prefill", branch: "mla", title: "Prefill · Gated MLA 层", kicker: "PREFILL · MLA" },
-        { mode: "decode", branch: "kda", title: "Decode · KDA 层", kicker: "DECODE · KDA" },
-        { mode: "decode", branch: "mla", title: "Decode · Gated MLA 层", kicker: "DECODE · MLA" },
-      ]
-      : [
-        { mode: "prefill", branch: branch, title: "Prefill · miss tokens · [B, T, H]", kicker: "PREFILL" },
-        { mode: "decode", branch: branch, title: "Decode · token 2+ · [B, 1, H] + cache", kicker: "DECODE" },
-      ];
     const steps = [];
-    chapters.forEach((chapter) => {
+    playChapters().forEach((chapter) => {
       const nodes = visibleGraphNodes(model, hw, chapter.branch);
       nodes.forEach((node, index) => {
         steps.push({
@@ -236,6 +244,20 @@
       });
     });
     return steps;
+  }
+
+  function jumpToPlayChapter(chapterIndex) {
+    if (!playSteps.length) playSteps = buildPlayScript();
+    const chapters = playChapters();
+    const target = chapters[chapterIndex];
+    if (!target) return;
+    const start = playSteps.findIndex((step) => chapterKey(step) === chapterKey(target));
+    if (start < 0) return;
+    stopPlay();
+    playIndex = start;
+    visited = new Set();
+    layerClock = 0;
+    applyStep(playSteps[playIndex]);
   }
 
   function clearPlayTimer() {
@@ -292,6 +314,14 @@
     playIndex += 1;
     applyStep(playSteps[playIndex]);
     if (!playing) return;
+    const cur = playSteps[playIndex];
+    const next = playSteps[playIndex + 1];
+    if (next && chapterKey(cur) !== chapterKey(next)) {
+      stopPlay();
+      updatePlayUi();
+      $("#playStatus").textContent = `${next.kicker} · Space`;
+      return;
+    }
     const delay = (520 * (playSteps[playIndex].hold || 1)) / playSpeed();
     playTimer = setTimeout(advancePlay, delay);
   }
@@ -306,6 +336,12 @@
       playIndex = -1;
       visited = new Set();
       layerClock = 0;
+      advancePlay();
+      return;
+    }
+    const cur = playSteps[playIndex];
+    const next = playSteps[playIndex + 1];
+    if (next && chapterKey(cur) !== chapterKey(next)) {
       advancePlay();
       return;
     }
@@ -325,7 +361,15 @@
     const total = playSteps.length || 1;
     const pct = playIndex < 0 ? 0 : ((playIndex + 1) / total) * 100;
     $("#playBar").style.width = `${pct}%`;
+    const chapters = playChapters();
     const step = playSteps[playIndex];
+    const onKey = step ? chapterKey(step) : "";
+    $("#playTicks").innerHTML = chapters.map((chapter, index) => (
+      `<button type="button" data-chapter="${index}" class="${chapterKey(chapter) === onKey ? "is-on" : ""}">${chapter.tick}</button>`
+    )).join("");
+    $("#playTicks").querySelectorAll("[data-chapter]").forEach((button) => {
+      button.addEventListener("click", () => jumpToPlayChapter(+button.dataset.chapter));
+    });
     if (doneLabel) {
       $("#playStatus").textContent = `${doneLabel} · ${playSteps.length} 步`;
     } else if (step) {
@@ -413,7 +457,14 @@
     $("#explainPrev").addEventListener("click", () => moveExplain(-1));
     $("#explainNext").addEventListener("click", () => moveExplain(1));
     window.addEventListener("keydown", (event) => {
-      if (event.target.matches("input, select, textarea, button")) return;
+      if (event.target.matches("input, select, textarea")) return;
+      if (event.key === " " || event.code === "Space") {
+        event.preventDefault();
+        if (playing) stopPlay();
+        else startPlay();
+        return;
+      }
+      if (event.target.matches("button")) return;
       if (event.key === "ArrowLeft") moveExplain(-1);
       if (event.key === "ArrowRight") moveExplain(1);
     });
@@ -537,9 +588,20 @@
     });
     $("#walkToc").innerHTML = parts.join("");
     $("#walkToc").querySelectorAll("[data-explain]").forEach((button) => {
+      const item = items.find((entry) => entry.id === button.dataset.explain);
       button.addEventListener("click", () => {
-        const item = items.find((entry) => entry.id === button.dataset.explain);
         if (item) applyExplainItem(item);
+      });
+      button.addEventListener("pointerenter", () => {
+        const ids = new Set(item?.nodeIds || []);
+        document.querySelectorAll("#walkthroughSvg [data-node]").forEach((el) => {
+          el.classList.toggle("is-hover", ids.has(el.dataset.node));
+        });
+      });
+      button.addEventListener("pointerleave", () => {
+        document.querySelectorAll("#walkthroughSvg [data-node].is-hover").forEach((el) => {
+          el.classList.remove("is-hover");
+        });
       });
     });
     const active = $("#walkToc").querySelector(".is-on");

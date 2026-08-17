@@ -395,6 +395,70 @@
     svg.addEventListener("dblclick", () => current.onZoom?.("fit"));
   }
 
+  function formulaOf(item) {
+    if (item.dIn && item.dOut) {
+      return { title: "GEMM", lines: [`${fmtNum(item.dIn)} × ${fmtNum(item.dOut)}`, "Y = X W"] };
+    }
+    if (item.stack && item.stackActive) {
+      return { title: "MoE", lines: [`Top-${item.stackActive} / ${item.stack}`] };
+    }
+    if (item.cacheRole === "readAppend") return { title: "cache", lines: ["read S · append 1"] };
+    if (item.cacheRole === "write") return { title: "cache", lines: ["write"] };
+    if (/residual/i.test(`${item.id} ${item.op} ${item.label}`)) return { title: "add", lines: ["y = x + f(x)"] };
+    if ((item.costId || "").startsWith("attn") || /softmax|attention/i.test(item.costId || item.op || "")) {
+      return { title: "Attention", lines: ["QKᵀ → V"] };
+    }
+    if (item.costId === "rms") return { title: "RMSNorm", lines: ["x / rms(x)"] };
+    if (item.costId === "embed") return { title: "lookup", lines: ["id → H"] };
+    if (item.costId === "all_to_all") return { title: "all-to-all", lines: [] };
+    return { title: item.op || item.kind, lines: [] };
+  }
+
+  function flowCardMarkup(item, box, ctx) {
+    const f = formulaOf(item);
+    const lines = [resolveShape(item.shape, ctx), ...f.lines].filter(Boolean);
+    const w = 150;
+    const h = 20 + lines.length * 13;
+    const x = box.x + box.width + 12;
+    const y = box.y;
+    return `<g class="walkthrough-flow" pointer-events="none">
+      <rect class="walkthrough-flow-card" x="${x}" y="${y}" width="${w}" height="${h}" rx="6" />
+      <text class="walkthrough-flow-title" x="${x + 8}" y="${y + 13}">${escapeHtml(f.title)}</text>
+      ${lines.map((line, i) => `<text class="walkthrough-flow-line" x="${x + 8}" y="${y + 28 + i * 13}">${escapeHtml(line)}</text>`).join("")}
+    </g>`;
+  }
+
+  function tokenStrip(box) {
+    const n = 5;
+    const tw = Math.max(14, box.width / n);
+    const cells = [];
+    for (let i = 0; i < n; i += 1) {
+      const label = i === n - 1 ? "T" : String(i);
+      cells.push(`<g class="walkthrough-token">
+        <rect class="walkthrough-token-cell" x="${box.x + i * tw}" y="${box.y}" width="${Math.max(12, tw - 2)}" height="${box.height}" rx="3" />
+        <text class="walkthrough-token-id" x="${box.x + i * tw + (tw - 2) / 2}" y="${box.y + box.height / 2 + 3}" text-anchor="middle">${label}</text>
+      </g>`);
+    }
+    return cells.join("");
+  }
+
+  function tokenMapLines(positions, nodes) {
+    const tok = nodes.find((item) => item.id === "token_ids" || item.id === "text_ids");
+    const emb = nodes.find((item) => item.id === "embedding");
+    if (!tok || !emb) return "";
+    const a = positions.get(tok.id);
+    const b = positions.get(emb.id);
+    if (!a || !b) return "";
+    const n = 5;
+    const lines = [];
+    for (let i = 0; i < n; i += 1) {
+      const x0 = a.x + ((i + 0.5) / n) * a.width;
+      const x1 = b.x + ((i + 0.5) / n) * b.width;
+      lines.push(`<path class="walkthrough-map-line" d="M ${x0} ${a.y + a.height} C ${x0} ${a.y + a.height + 16}, ${x1} ${b.y - 16}, ${x1} ${b.y}" />`);
+    }
+    return lines.join("");
+  }
+
   function expertGrid(item, box) {
     const total = Math.min(item.stack || 0, 128);
     const active = Math.max(1, Math.min(item.stackActive || 1, total));
@@ -512,8 +576,12 @@
           const bowX = Math.min(startX, endX) > layout.axis
             ? layout.width - 26
             : 26;
-          d = `M ${startX} ${startY} C ${startX} ${startY + 50}, ${bowX} ${startY + 66}, ${bowX} ${(startY + endY) / 2}`
+          const midY = (startY + endY) / 2;
+          d = `M ${startX} ${startY} C ${startX} ${startY + 50}, ${bowX} ${startY + 66}, ${bowX} ${midY}`
             + ` C ${bowX} ${endY - 66}, ${endX} ${endY - 50}, ${endX} ${endY}`;
+          if (item.spine) {
+            paths.push(`<g class="walkthrough-plus" transform="translate(${bowX} ${midY})"><circle r="7" /><text text-anchor="middle" dy="4">+</text></g>`);
+          }
         } else {
           const control = Math.max(22, (endY - startY) * 0.45);
           d = `M ${startX} ${startY} C ${startX} ${startY + control}, ${endX} ${endY - control}, ${endX} ${endY}`;
@@ -534,13 +602,17 @@
       groupMarkup.push(`<rect class="walkthrough-block-frame" x="${minX}" y="${minY}" width="${maxX - minX}" height="${maxY - minY}" rx="14" />`);
       groupMarkup.push(`<text class="walkthrough-block-label" x="${minX + 14}" y="${minY + 22}">DECODER LAYER · 代表层${state.layerNote ? ` · ${escapeHtml(state.layerNote)}` : ""}</text>`);
     }
+    const focusGroup = activeNode ? groupOf(activeNode) : null;
     groupBoxes.forEach((box, groupId) => {
-      groupMarkup.push(`<text class="walkthrough-group-label" data-group-link="${groupId}" x="${box.minX - 12}" y="${box.minY - 10}">${GROUP_LABELS[groupId] || ""}</text>`);
+      const faded = focusGroup !== null && groupId !== focusGroup ? " is-faded" : "";
+      groupMarkup.push(`<text class="walkthrough-group-label${faded}" data-group-link="${groupId}" x="${box.minX - 12}" y="${box.minY - 10}">${GROUP_LABELS[groupId] || ""}</text>`);
       if (groupId !== 3 && blockGroups.includes(groupId)) {
         groupMarkup.push(`<line class="walkthrough-group-rule" x1="${box.minX - 12}" y1="${box.minY - 24}" x2="${box.maxX + 12}" y2="${box.minY - 24}" />`);
       }
     });
 
+    const orderIndex = new Map(nodes.map((item, i) => [item.id, i]));
+    const activeOrd = orderIndex.get(activeNode?.id) ?? 0;
     const nodeMarkup = nodes.map((item, index) => {
       const box = layout.positions.get(item.id);
       const g = box.geo;
@@ -548,10 +620,11 @@
       const selected = item.id === activeNode?.id;
       const upstream = activeUpstream.has(item.id);
       const done = visited.has(item.id) && !selected;
-      const pending = playing && !selected && !done && !upstream;
+      const future = playing && orderIndex.get(item.id) > activeOrd && !selected && !upstream;
+      const pending = playing && !selected && !done && !upstream && !future;
       const dimmed = !playing && activeNode && !selected && !upstream;
       const hot = item.id === hotId && !playing;
-      const cls = `walkthrough-node tensor-${escapeHtml(item.kind)}${selected ? " is-selected" : ""}${upstream ? " is-upstream" : ""}${done ? " is-done" : ""}${pending ? " is-pending" : ""}${dimmed ? " is-dimmed" : ""}${hot ? " is-hot" : ""}`;
+      const cls = `walkthrough-node tensor-${escapeHtml(item.kind)}${selected ? " is-selected" : ""}${upstream ? " is-upstream" : ""}${done ? " is-done" : ""}${pending ? " is-pending" : ""}${future ? " is-future" : ""}${dimmed ? " is-dimmed" : ""}${hot ? " is-hot" : ""}`;
       const aria = escapeHtml(`${item.label}, ${resolveShape(item.shape, ctx)}`);
 
       const sheetCount = g.stack > 1 ? Math.min(3, g.stack - 1) : 0;
@@ -564,12 +637,19 @@
         : "";
       const nameY = box.y - 4 * sheetCount - 10;
 
+      const tokens = (item.id === "token_ids" || item.id === "text_ids") ? tokenStrip(box) : "";
+      const scanW = Math.max(8, box.width * 0.16);
+      const scan = selected && playing && (g.matrix || tokens)
+        ? `<rect class="walkthrough-scan" x="${box.x}" y="${box.y}" width="${scanW}" height="${box.height}"><animate attributeName="x" from="${box.x}" to="${box.x + box.width - scanW}" dur="0.7s" repeatCount="indefinite" /></rect>`
+        : "";
+
       if (g.chip) {
         return `
         <g class="${cls}" data-node="${escapeHtml(item.id)}" role="button" tabindex="0" aria-label="${aria}">
           ${sheets.join("")}
           <rect class="walkthrough-node-face" x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" rx="6" />
           <rect x="${box.x}" y="${box.y}" width="4" height="${box.height}" rx="2" fill="${color}" />
+          ${tokens}${scan}
           ${stackLabel}
           <text class="walkthrough-node-index" x="${box.x + box.width - 8}" y="${box.y + 15}" text-anchor="end">${String(index + 1).padStart(2, "0")}</text>
           <text class="walkthrough-node-label" x="${box.x + 12}" y="${box.y + 27}">${escapeHtml(item.label)}</text>
@@ -587,6 +667,7 @@
           <rect x="${box.x}" y="${box.y}" width="4" height="${box.height}" rx="2" fill="${color}" />
           ${grid}
           ${experts}
+          ${tokens}${scan}
           ${stackLabel}
           <text class="walkthrough-node-label" x="${box.x + box.width / 2}" y="${nameY}" text-anchor="middle">${escapeHtml(item.label)}</text>
           <text class="walkthrough-node-index" x="${box.x + box.width - 8}" y="${box.y + 16}" text-anchor="end">${String(index + 1).padStart(2, "0")}</text>
@@ -607,7 +688,7 @@
       </defs>
       <g class="walkthrough-viewport" transform="translate(${view.tx} ${view.ty}) scale(${view.scale})">
         <g class="walkthrough-groups">${stackMarkup}${groupMarkup.join("")}</g>
-        <g class="walkthrough-edges">${paths.join("")}</g>
+        <g class="walkthrough-edges">${tokenMapLines(layout.positions, nodes)}${paths.join("")}</g>
         <g>${nodeMarkup}</g>
       </g>`;
 
@@ -633,17 +714,30 @@
         state.onChapter?.("layers");
       });
     });
+    const viewport = svg.querySelector(".walkthrough-viewport");
+    const clearFlow = () => viewport?.querySelector(".walkthrough-flow")?.remove();
     svg.querySelectorAll("[data-node]").forEach((element) => {
+      const item = nodes.find((node) => node.id === element.dataset.node);
+      const box = layout.positions.get(element.dataset.node);
       const select = () => {
         if (Date.now() < suppressClickUntil) return;
         onSelect?.(element.dataset.node);
       };
       element.addEventListener("click", select);
       element.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
+        if (event.key === "Enter") {
           event.preventDefault();
           select();
         }
+      });
+      element.addEventListener("pointerenter", () => {
+        clearFlow();
+        if (item && box && viewport) viewport.insertAdjacentHTML("beforeend", flowCardMarkup(item, box, ctx));
+        element.classList.add("is-hover");
+      });
+      element.addEventListener("pointerleave", () => {
+        clearFlow();
+        element.classList.remove("is-hover");
       });
     });
 

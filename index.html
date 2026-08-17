@@ -82,8 +82,19 @@
     .walkthrough-node.is-selected .walkthrough-node-face{stroke:var(--green);stroke-width:2.2;fill:#f4fbe3}
     .walkthrough-node.is-upstream .walkthrough-node-face{stroke:#7a8f55}
     .walkthrough-node.is-done .walkthrough-node-face{fill:#eef6d8;stroke:#9bb56a}
-    .walkthrough-node.is-dimmed{opacity:.28}.walkthrough-node.is-pending{opacity:.22}
+    .walkthrough-node.is-dimmed{opacity:.28}.walkthrough-node.is-pending{opacity:.22}.walkthrough-node.is-future{opacity:.1;pointer-events:none}
     .walkthrough-node.is-hot .walkthrough-node-face{fill:#fff2e9;stroke:var(--orange)}
+    .walkthrough-node.is-hover .walkthrough-node-face{stroke:var(--orange);stroke-width:1.8}
+    .walkthrough-group-label.is-faded{opacity:.35}
+    .walkthrough-token-cell{fill:#fffdf8;stroke:#d8d9cf}
+    .walkthrough-token-id{font:700 8px ui-monospace,SFMono-Regular,monospace;fill:var(--ink)}
+    .walkthrough-map-line{fill:none;stroke:#9bb56a;stroke-width:1;stroke-dasharray:3 3}
+    .walkthrough-plus circle{fill:#fffdf8;stroke:var(--green);stroke-width:1.2}
+    .walkthrough-plus text{font:800 10px Inter,sans-serif;fill:var(--green)}
+    .walkthrough-scan{fill:rgba(201,243,106,.38);pointer-events:none}
+    .walkthrough-flow-card{fill:#fffdf8;stroke:#d8d9cf;filter:drop-shadow(0 6px 16px rgba(21,35,30,.12))}
+    .walkthrough-flow-title{font:800 10px Inter,sans-serif;fill:var(--green);letter-spacing:.06em}
+    .walkthrough-flow-line{font:10px ui-monospace,SFMono-Regular,monospace;fill:var(--ink)}
     .walkthrough-node-back{fill:#eceadf}.walkthrough-node-label{font:700 11px Inter,sans-serif;fill:var(--ink)}.walkthrough-node-shape{font:10px ui-monospace,SFMono-Regular,monospace;fill:var(--muted)}.walkthrough-node-index{font:9px ui-monospace,SFMono-Regular,monospace;fill:#9aa39c}
     .walkthrough-block-frame{fill:#f4f2e7;stroke:#cfd1c3;stroke-width:1.2}
     .walkthrough-block-label{font:800 11px Inter,sans-serif;fill:var(--green);letter-spacing:.12em}
@@ -99,8 +110,13 @@
     .play-row{display:flex;gap:6px}
     .play-row button{border:1px solid var(--line);background:#fbfaf5;padding:6px 10px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700}
     .play-row button:hover{border-color:var(--ink)}
-    .play-meter{flex:1;min-width:100px;height:6px;background:#eeeae0;border-radius:99px;overflow:hidden}
-    .play-meter span{display:block;height:100%;width:0;background:var(--green);transition:width .2s ease}
+    .play-timeline{position:relative;flex:1;min-width:160px;height:22px;background:#eeeae0;border-radius:8px;overflow:hidden}
+    .play-bar{position:absolute;inset:0 auto 0 0;width:0;background:rgba(24,78,59,.16);pointer-events:none}
+    .play-ticks{position:absolute;inset:0;display:flex}
+    .play-ticks button{flex:1;min-width:0;border:0;border-right:1px solid #fff;background:transparent;font:700 9px Inter,sans-serif;letter-spacing:.04em;color:var(--muted);cursor:pointer;padding:0 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .play-ticks button:last-child{border-right:0}
+    .play-ticks button.is-on{background:var(--green);color:var(--lime)}
+    .play-ticks button:hover{color:var(--ink)}
     .play-status{font-size:11px;color:var(--muted);white-space:nowrap}.play-status b{color:var(--ink);margin-left:8px}
     .play-speed{width:88px}
     .jig{padding:14px 16px;border-bottom:1px solid var(--line)}
@@ -156,7 +172,10 @@
         <button type="button" id="stepBtn">下一步</button>
         <button type="button" id="resetBtn">重来</button>
       </div>
-      <div class="play-meter"><span id="playBar"></span></div>
+      <div class="play-timeline" id="playTimeline" aria-label="播放时间轴">
+        <span class="play-bar" id="playBar"></span>
+        <div class="play-ticks" id="playTicks"></div>
+      </div>
       <div class="play-status">
         <span id="playStatus">Prefill → Decode</span>
         <b id="pathClock">层内 0</b>
