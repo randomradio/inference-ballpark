@@ -13,6 +13,7 @@
   let layerClock = 0;
   let zoom = "fit";
   let currentScale = 1;
+  let explainId = "overview";
 
   const fmt = (n, d = 1) => n.toLocaleString("en-US", { maximumFractionDigits: d });
   const compact = (n) => {
@@ -258,6 +259,7 @@
     layerClock = 0;
     mode = "prefill";
     activeNodeId = "hidden_in";
+    explainId = "overview";
     zoom = "fit";
     syncModeButtons();
     render();
@@ -272,6 +274,7 @@
     mode = step.mode;
     if (step.branch) branch = step.branch;
     activeNodeId = step.nodeId;
+    explainId = `node:${step.nodeId}`;
     visited.add(step.nodeId);
     syncModeButtons();
     render();
@@ -353,6 +356,9 @@
         mode = button.dataset.mode;
         visited = new Set();
         layerClock = 0;
+        if (explainId === "prefill" || explainId === "decode" || explainId === "overview") {
+          explainId = mode;
+        }
         syncModeButtons();
         render();
       });
@@ -402,6 +408,13 @@
     $("#playSpeed").addEventListener("input", () => {
       $("#speedOut").textContent = `${playSpeed().toFixed(1)}×`;
     });
+    $("#explainPrev").addEventListener("click", () => moveExplain(-1));
+    $("#explainNext").addEventListener("click", () => moveExplain(1));
+    window.addEventListener("keydown", (event) => {
+      if (event.target.matches("input, select, textarea, button")) return;
+      if (event.key === "ArrowLeft") moveExplain(-1);
+      if (event.key === "ArrowRight") moveExplain(1);
+    });
   }
 
   function nodeTimes(nodes, model, hw, ctx) {
@@ -421,8 +434,7 @@
   }
 
   function fillInspector(node, ctx, timedEntry) {
-    $("#nodeKind").textContent = `${node.kind.toUpperCase()} · ${mode.toUpperCase()}`;
-    $("#nodeTitle").textContent = node.label;
+    if (!node) return;
     $("#nodeShape").textContent = window.BallparkWalkthrough.resolveShape(node.shape, ctx);
     $("#nodeOp").textContent = node.op;
     if (timedEntry) {
@@ -441,7 +453,108 @@
       $("#nodeTime").textContent = "—";
       $("#nodeBound").textContent = "—";
     }
-    $("#nodeDetail").textContent = node.detail;
+  }
+
+  function currentToc(model, nodes, hw) {
+    return window.BallparkExplain.buildToc(model, nodes, { mode, branch, ep: hw.ep });
+  }
+
+  function applyExplainItem(item) {
+    stopPlay();
+    explainId = item.id;
+    if (item.id === "prefill" || item.id === "decode") {
+      mode = item.id;
+      visited = new Set();
+      layerClock = 0;
+      syncModeButtons();
+    }
+    if (item.nodeIds && item.nodeIds.length) {
+      const model = selectedModel();
+      const { hw } = readState();
+      const visible = new Set(visibleGraphNodes(model, hw, branch).map((node) => node.id));
+      const first = item.nodeIds.find((id) => visible.has(id));
+      if (first) {
+        activeNodeId = first;
+        visited.add(first);
+      }
+    }
+    render();
+  }
+
+  function moveExplain(delta) {
+    const model = selectedModel();
+    const { hw } = readState();
+    const nodes = visibleGraphNodes(model, hw, branch);
+    const items = currentToc(model, nodes, hw);
+    const key = explainId.startsWith("node:")
+      ? window.BallparkExplain.chapterIdFor(model, explainId, activeNodeId, nodes, { mode, branch, ep: hw.ep })
+      : explainId;
+    const index = items.findIndex((item) => item.id === key);
+    const next = items[index + delta];
+    if (next) applyExplainItem(next);
+  }
+
+  function ensureExplainVisible(model, nodes, hw) {
+    const items = currentToc(model, nodes, hw);
+    if (items.some((item) => item.id === explainId)) return;
+    if (explainId.startsWith("node:")) {
+      const id = explainId.slice(5);
+      if (nodes.some((node) => node.id === id)) return;
+    }
+    explainId = "overview";
+  }
+
+  function renderToc(model, nodes, hw) {
+    const items = currentToc(model, nodes, hw);
+    const chapterId = window.BallparkExplain.chapterIdFor(
+      model, explainId, activeNodeId, nodes, { mode, branch, ep: hw.ep },
+    );
+    const X = window.BallparkExplain.escapeHtml;
+    const titles = window.BallparkExplain.SECTION_TITLE;
+    let last = null;
+    const parts = ['<div class="toc-kicker">目录</div>'];
+    items.forEach((item) => {
+      if (item.section !== last) {
+        parts.push(`<div class="toc-sec">${X(titles[item.section] || item.section)}</div>`);
+        last = item.section;
+      }
+      const on = item.id === explainId;
+      const inn = !on && explainId.startsWith("node:") && item.id === chapterId;
+      parts.push(`<button type="button" data-explain="${X(item.id)}" class="${on ? "is-on" : inn ? "is-in" : ""}">${X(item.title)}</button>`);
+    });
+    $("#walkToc").innerHTML = parts.join("");
+    $("#walkToc").querySelectorAll("[data-explain]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const item = items.find((entry) => entry.id === button.dataset.explain);
+        if (item) applyExplainItem(item);
+      });
+    });
+    const active = $("#walkToc").querySelector(".is-on");
+    const toc = $("#walkToc");
+    if (active && toc) {
+      const top = active.offsetTop - toc.clientHeight / 2 + active.clientHeight / 2;
+      toc.scrollTop = Math.max(0, top);
+    }
+  }
+
+  function fillExplain(model, node, nodes, ctx, hw, timedEntry) {
+    const page = window.BallparkExplain.page(model, {
+      explainId,
+      node,
+      nodes,
+      ctx,
+      mode,
+      branch,
+      ep: hw.ep,
+    });
+    $("#explainKicker").textContent = page.kicker;
+    $("#explainTitle").textContent = page.title;
+    $("#explainWhat").textContent = page.what;
+    $("#explainMap").textContent = page.map;
+    $("#explainPhase").textContent = page.phase;
+    $("#explainCost").textContent = page.cost;
+    fillInspector(node, ctx, timedEntry);
+    $("#explainMetrics").hidden = ["read", "overview", "prefill", "decode", "layers"].includes(explainId);
   }
 
   function renderMetrics(est, model, state) {
@@ -600,16 +713,33 @@
       onSelect: (id) => {
         stopPlay();
         activeNodeId = id;
+        explainId = `node:${id}`;
         visited.add(id);
         render();
+      },
+      onSelectGroup: (groupId) => {
+        const section = window.BallparkExplain.GROUP_SECTION[groupId];
+        const item = currentToc(model, nodes, state.hw).find((entry) => entry.section === section);
+        if (item) applyExplainItem(item);
+      },
+      onChapter: (id) => {
+        const item = currentToc(model, nodes, state.hw).find((entry) => entry.id === id);
+        if (item) applyExplainItem(item);
+        else {
+          stopPlay();
+          explainId = id;
+          render();
+        }
       },
     });
 
     currentScale = drawn?.scale || 1;
     $("#zoomPct").textContent = `${Math.round(currentScale * 100)}%`;
 
+    ensureExplainVisible(model, nodes, state.hw);
     const active = nodes.find((item) => item.id === activeNodeId) || nodes[0];
-    if (active) fillInspector(active, ctx, times.get(active.id));
+    renderToc(model, nodes, state.hw);
+    fillExplain(model, active, nodes, ctx, state.hw, active ? times.get(active.id) : null);
     $("#graphCaption").textContent = `${graph.caption} 证据：${graph.evidenceLevel}。`;
     $("#graphSources").innerHTML = (graph.sources || []).map((source) => (
       `<a href="${source.url}" target="_blank" rel="noreferrer">${source.label} ↗</a>`

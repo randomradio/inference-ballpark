@@ -46,8 +46,27 @@
     .zoomjig{display:inline-flex;align-items:center;gap:4px;margin-right:6px;padding-right:10px;border-right:1px solid var(--line)}
     .zoomjig button{border:1px solid var(--line);background:#fbfaf5;border-radius:6px;padding:2px 7px;font-size:10px;font-weight:800;cursor:pointer;color:var(--muted)}
     .zoomjig button:hover{border-color:var(--ink);color:var(--ink)}.zoomjig b{min-width:34px;text-align:center;color:var(--ink);font-variant-numeric:tabular-nums}
-    .walkthrough-stage-scroll{height:min(70vh,880px);overflow:hidden;border:1px solid var(--line);border-radius:16px;background:#fbfaf5;cursor:grab;touch-action:none}
+    .stage-split{display:grid;grid-template-columns:minmax(0,1fr) 220px;border:1px solid var(--line);border-radius:16px;overflow:hidden;background:#fbfaf5}
+    .walkthrough-stage-scroll{height:min(70vh,880px);overflow:hidden;border:0;border-radius:0;background:#fbfaf5;cursor:grab;touch-action:none}
     .walkthrough-stage-scroll.is-panning{cursor:grabbing}
+    .toc{height:min(70vh,880px);overflow:auto;border-left:1px solid var(--line);background:var(--card);padding:10px 0 18px}
+    .toc-kicker{padding:0 12px 8px;font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+    .toc-sec{padding:10px 12px 2px;font-size:9px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+    .toc button{display:block;width:100%;text-align:left;border:0;background:transparent;padding:5px 12px 5px 10px;font:inherit;font-size:12px;font-weight:650;color:var(--ink);cursor:pointer;border-left:2px solid transparent}
+    .toc button:hover{background:#f0eee6}
+    .toc button.is-on{border-left-color:var(--green);background:#f4fbe3;color:var(--green);font-weight:800}
+    .toc button.is-in{border-left-color:#9bb56a;background:#f7f8f0}
+    .explain{border:1px solid var(--line);border-radius:16px;padding:12px 14px;background:var(--card)}
+    .explain-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+    .explain-nav{display:flex;gap:4px;flex:0 0 auto}
+    .explain-nav button{border:1px solid var(--line);background:#fbfaf5;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:800;cursor:pointer;color:var(--muted)}
+    .explain-nav button:hover{border-color:var(--ink);color:var(--ink)}
+    .explain h3{margin:2px 0 10px;font-size:18px;letter-spacing:-.03em}
+    .explain-grid{margin:0;display:grid;grid-template-columns:52px 1fr;gap:7px 12px;font-size:13px;line-height:1.45}
+    .explain-grid dt{color:var(--muted);font-size:11px;font-weight:800;padding-top:1px}
+    .explain-grid dd{margin:0}
+    .explain-metrics{margin:10px 0 0;padding-top:10px;border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px 10px;font-size:12px}
+    .explain-metrics dt{color:var(--muted)}.explain-metrics dd{margin:0;font-variant-numeric:tabular-nums}
     svg.walkthrough{display:block;width:100%;height:100%}
     .walkthrough-dim{font:9px ui-monospace,SFMono-Regular,monospace;fill:#9aa39c}
     .walkthrough-node-sheet{fill:#fffdf8;stroke:#d8d9cf;stroke-width:1}
@@ -94,10 +113,8 @@
     input[type=number],select{width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 8px;background:white;color:var(--ink)}
     input[type=range]{width:100%;accent-color:var(--green)}
     .pipeline{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}.chip{padding:4px 8px;border-radius:999px;background:#f0eee6;font-size:10px;font-weight:700;color:var(--muted)}.chip.on{background:var(--green);color:#f8fff6}
-    .inspector{position:sticky;bottom:calc(var(--drawer-h,52px) + 8px);z-index:6;max-height:140px;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--card);box-shadow:0 -10px 24px rgba(21,35,30,.06)}
-    .inspector .kind{font-size:10px;font-weight:800;letter-spacing:.08em;color:var(--muted)}.inspector h4{margin:2px 0 6px;font-size:16px;letter-spacing:-.03em}
-    .inspector dl{margin:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px 10px;font-size:12px}.inspector dt{color:var(--muted)}.inspector dd{margin:0;font-variant-numeric:tabular-nums}
-    .inspector p{font-size:12px;color:var(--muted);margin:8px 0 0}.sources-inline{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}.sources-inline a{font-size:11px;color:var(--green)}
+    .explain .kind{font-size:10px;font-weight:800;letter-spacing:.08em;color:var(--muted)}
+    .sources-inline{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}.sources-inline a{font-size:11px;color:var(--green)}
     table{width:100%;border-collapse:collapse;font-size:11px}th{text-align:left;color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em;padding:8px 4px;border-bottom:1px solid var(--line)}td{padding:8px 4px;border-bottom:1px solid var(--line);white-space:nowrap}td strong{font-size:12px}.badge{padding:2px 6px;border-radius:4px;background:#eeeae0;font-size:9px}.hot{color:#9a4b28}
     details.jig>summary{cursor:pointer;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:800;list-style:none}details.jig>summary::-webkit-details-marker{display:none}details.jig .jig-body{padding-top:12px}
     .topo-facts{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
@@ -110,8 +127,8 @@
     .topo-mini{display:block;margin-top:3px;color:var(--muted);font-size:10px}
     .sources-list{margin:0;padding-left:16px;color:var(--muted);font-size:11px}.sources-list li{padding:4px 0}.sources-list a{text-underline-offset:2px}
     @media(max-width:1180px){.metrics{grid-template-columns:repeat(3,1fr)}.compare{grid-template-columns:1fr 1fr}.drawer-ctx{display:none}}
-    @media(max-width:900px){.stage{padding:10px 10px 12px 12px}.grid-3{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:1fr 1fr}.inspector dl{grid-template-columns:1fr 1fr}}
-    @media(max-width:680px){.studio{grid-template-columns:1fr}.jigs{position:static;max-height:none;border-left:0;border-top:1px solid var(--line)}.inspector{position:static}.metrics,.compare{grid-template-columns:1fr 1fr}.drawer-peek span:nth-child(n+4){display:none}}
+    @media(max-width:900px){.stage{padding:10px 10px 12px 12px}.grid-3{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:1fr 1fr}.stage-split{grid-template-columns:1fr}.toc{height:auto;max-height:28vh;border-left:0;border-top:1px solid var(--line)}.explain-metrics{grid-template-columns:1fr 1fr}}
+    @media(max-width:680px){.studio{grid-template-columns:1fr}.jigs{position:static;max-height:none;border-left:0;border-top:1px solid var(--line)}.metrics,.compare{grid-template-columns:1fr 1fr}.drawer-peek span:nth-child(n+4){display:none}}
   </style>
 </head>
 <body>
@@ -163,13 +180,30 @@
       <span><i class="swatch" style="background:#83b8ff"></i>module</span>
       <span class="hint" style="flex-basis:100%">宽 ∝ log₂列维 · 高 ∝ log₂行/token · 叠片 ×N = heads/experts · 片堆 = 层 · 网格 = 矩阵 · 滚轮缩放 / 拖拽平移 / 双击适应</span>
     </div>
-    <div class="walkthrough-stage-scroll">
-      <svg id="walkthroughSvg" class="walkthrough" role="img" aria-label="模型单元架构图"></svg>
+    <div class="stage-split">
+      <div class="walkthrough-stage-scroll">
+        <svg id="walkthroughSvg" class="walkthrough" role="img" aria-label="模型单元架构图"></svg>
+      </div>
+      <nav class="toc" id="walkToc" aria-label="架构目录"></nav>
     </div>
-    <div class="inspector" id="inspector">
-      <div class="kind" id="nodeKind">NODE</div>
-      <h4 id="nodeTitle">选择一个节点</h4>
-      <dl>
+    <article class="explain" id="walkExplain">
+      <div class="explain-head">
+        <div>
+          <div class="kind" id="explainKicker">INTRO</div>
+          <h3 id="explainTitle">怎么读这张图</h3>
+        </div>
+        <div class="explain-nav">
+          <button type="button" id="explainPrev" aria-label="上一章">←</button>
+          <button type="button" id="explainNext" aria-label="下一章">→</button>
+        </div>
+      </div>
+      <dl class="explain-grid">
+        <dt>是什么</dt><dd id="explainWhat"></dd>
+        <dt>图上</dt><dd id="explainMap"></dd>
+        <dt>阶段</dt><dd id="explainPhase"></dd>
+        <dt>代价</dt><dd id="explainCost"></dd>
+      </dl>
+      <dl class="explain-metrics" id="explainMetrics">
         <dt>Shape</dt><dd id="nodeShape">—</dd>
         <dt>Op</dt><dd id="nodeOp">—</dd>
         <dt>FLOPs</dt><dd id="nodeFlops">—</dd>
@@ -179,9 +213,8 @@
         <dt>时间</dt><dd id="nodeTime">—</dd>
         <dt>瓶颈</dt><dd id="nodeBound">—</dd>
       </dl>
-      <p id="nodeDetail"></p>
       <div class="sources-inline" id="graphSources"></div>
-    </div>
+    </article>
   </section>
 
   <aside class="jigs" id="jigs">
@@ -303,6 +336,7 @@
 <script src="js/model-graphs.js"></script>
 <script src="js/roofline.js"></script>
 <script src="js/walkthrough.js"></script>
+<script src="js/explain.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

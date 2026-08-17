@@ -83,4 +83,5 @@ MoE 的 expert 权重读按本卡实际命中的 distinct expert 数整块计入
 - `js/model-graphs.js` — 单元 DAG（含 cache 角色与代价 id）
 - `js/roofline.js` — 逐步代价与吞吐
 - `js/walkthrough.js` — 纵向 DAG 与播放高亮
+- `js/explain.js` — 目录与四行说明（是什么 / 图上 / 阶段 / 代价）
 - `js/app.js` — 控件与渲染

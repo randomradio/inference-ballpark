@@ -139,6 +139,7 @@
   // Vertical column: embedding, nested decoder (attention + MoE), output head.
   const GROUP_OF_STAGE = { 0: 0, 1: 1, 2: 2, 3: 2, 4: 3 };
   const GROUP_LABELS = ["EMBEDDING", "ATTENTION", "MOE FFN · SERVING", "OUTPUT HEAD"];
+  const groupOf = (item) => GROUP_OF_STAGE[item.stageIndex] ?? 2;
 
   function computeLayout(nodes, ctx) {
     const visibleIds = new Set(nodes.map((item) => item.id));
@@ -562,21 +563,26 @@
         <g>${nodeMarkup}</g>
       </g>`;
 
-    const scrollToLayoutY = (layoutY) => {
-      const rect = svg.getBoundingClientRect();
-      const header = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--header-h")) || 0;
-      const screenY = rect.top + window.scrollY + layoutY * view.scale + view.ty;
-      window.scrollTo({ top: Math.max(0, screenY - header - 30), behavior: "smooth" });
+    const panToBox = (box) => {
+      if (!box) return;
+      view.tx = cw / 2 - ((box.minX + box.maxX) / 2) * view.scale;
+      view.ty = ch / 2 - box.minY * view.scale;
+      applyView(svg);
     };
     svg.querySelectorAll("[data-group-link]").forEach((element) => {
       element.addEventListener("click", () => {
-        const box = groupBoxes.get(Number(element.dataset.groupLink));
-        if (box) scrollToLayoutY(box.minY);
+        const groupId = Number(element.dataset.groupLink);
+        panToBox(groupBoxes.get(groupId));
+        state.onSelectGroup?.(groupId);
       });
     });
     svg.querySelectorAll("[data-stack]").forEach((element) => {
       element.addEventListener("click", () => {
-        if (blockFrameTop !== null) scrollToLayoutY(blockFrameTop);
+        if (blockFrameTop !== null) {
+          view.ty = ch / 2 - blockFrameTop * view.scale;
+          applyView(svg);
+        }
+        state.onChapter?.("layers");
       });
     });
     svg.querySelectorAll("[data-node]").forEach((element) => {
@@ -596,5 +602,7 @@
     return { nodes, activeNode, scale: view.scale };
   }
 
-  window.BallparkWalkthrough = { render, visibleNodes, resolveShape, upstreamIds, topologicalOrder, nodeGeometry };
+  window.BallparkWalkthrough = {
+    render, visibleNodes, resolveShape, upstreamIds, topologicalOrder, nodeGeometry, groupOf, GROUP_LABELS,
+  };
 }());
