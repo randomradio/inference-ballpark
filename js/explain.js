@@ -389,7 +389,7 @@
         cost: "长上下文时 MLA cache 是 Attention 主项。小 batch 时读 8 个 INT4 expert。",
       },
       layers: {
-        what: "代表层展开 MLA + MoE。薄片：第 1 层 dense FFN（蓝），其余 60 层 MoE（绿）。",
+        what: "代表层展开 MLA + MoE。薄片去掉这一层之后：1 层 dense FFN（蓝）+ 59 层 MoE（绿）。",
         map: "薄片宽 = 7,168。没有 KDA/MLA 交错，Attention 种类单一。",
         phase: "61 层都走满 MLA。只有 FFN 在第 1 层换成 dense。",
         cost: "Attention × 61 + dense FFN × 1 + MoE × 60。",
@@ -518,7 +518,7 @@
         cost: "长上下文先撞 KV 显存。小 batch 时 MoE 读 4 个 BF16 expert。",
       },
       layers: {
-        what: "代表层是 sparse GQA + MoE。薄片：前 3 层 dense（蓝），其余 57 层 MoE（绿）。",
+        what: "代表层是 sparse GQA + MoE。薄片去掉这一层之后：3 层 dense（蓝）+ 56 层 MoE（绿）。",
         map: "薄片宽 = 6,144。蓝层 Attention 仍是 GQA，只是 FFN 不走 MoE。",
         phase: "60 层都写/读 paged KV。稀疏只作用于后 57 层的 Attention 计算。",
         cost: "dense GQA × 3 + sparse GQA × 57 + dense FFN × 3 + MoE × 57。",
