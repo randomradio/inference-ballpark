@@ -13,7 +13,7 @@
     { id: "overview", section: "intro", title: null },
     { id: "prefill", section: "intro", title: "Prefill" },
     { id: "decode", section: "intro", title: "Decode" },
-    { id: "layers", section: "intro", title: "其余层" },
+    { id: "layers", section: "intro", title: "层类型" },
   ];
 
   const READ = {
@@ -45,16 +45,16 @@
 
   function layersPage(model) {
     const d = model.dims;
-    const note = d.kdaLayers
-      ? `${d.kdaLayers} 层 KDA + ${d.mlaLayers} 层 Gated MLA，按层号交错，不会同层并存。`
+    const mix = d.kdaLayers
+      ? `${d.kdaLayers} 层 KDA + ${d.mlaLayers} 层 Gated MLA，按层号交错，同一层只走一种。`
       : `${d.denseLayers || 0} 层 dense FFN + ${d.moeLayers || d.layers} 层 MoE。`;
     return {
-      kicker: "INTRO · 层堆",
-      title: `其余 ${Math.max(0, d.layers - 1)} 层`,
-      what: `中间框是代表层。其下每条薄片是其余一层，颜色 = 层类型。${note}`,
-      map: "薄片宽度 = 隐层 H。点击薄片或本条目录，视口回到代表层。层数与种类来自模型 config，不是装饰。",
-      phase: "Prefill 与 Decode 都要走完全部层。图上只算一层的代价，roofline 再乘层数（once 节点不乘）。",
-      cost: "总时间 ≈ 代表层 × 层数。混合 Attention 的模型按层类型分别加总。",
+      kicker: "INTRO · 层",
+      title: `${d.layers} 层`,
+      what: mix,
+      map: `隐层宽度 ${Number(d.H).toLocaleString("en-US")}。每层进出都是这条 residual。`,
+      phase: "Prefill 和 Decode 都要过完全部层。",
+      cost: "总时间按层类型分别加总，同一层不会把两种 Attention 算两遍。",
     };
   }
 
@@ -89,10 +89,11 @@
         cost: "Decode 带宽按 576 维 latent。小 batch 时 MoE 读 8 个 FP8 expert 整块。",
       },
       layers: {
-        what: "代表层展开 DSA + MLA。薄片：前 3 层 dense FFN（蓝），其后每 4 层 1 个 full indexer（橙），3 层 IndexShare（绿）。",
-        map: "薄片宽 = 6,144。橙 = 算满 indexer，绿 = 复用 Top-K。",
-        phase: "78 层都走。IndexShare 只改 Attention 的 indexer，不改 MoE。",
-        cost: "roofline 按 full / share 两种 Attention 分别乘层数，再加 3 层 dense FFN + 75 层 MoE。",
+        title: "78 层",
+        what: "前 3 层 FFN 是 dense。之后 75 层是 Top-8 / 256 MoE。Attention 都是 MLA；75 个稀疏层里每 4 层有 1 层算满 DSA indexer，后 3 层 IndexShare 复用同一套 Top-2048。",
+        map: "隐层 6,144。KV 以 512+64 存放。DSA 每 query 只留 2048 个位置。",
+        phase: "78 层 Prefill / Decode 都走。IndexShare 只跳过 indexer 打分，MLA 和 MoE 每层都做。",
+        cost: "3×dense FFN + 75×MoE；Attention 是 19 层 full indexer + 56 层 IndexShare。",
       },
       pages: {
         embed: {
@@ -231,14 +232,14 @@
         kicker: "INTRO · KIMI K3",
         title: "Kimi K3 · 2.8T / 104B",
         what: "93 层 decoder：69 层 KDA + 24 层 Gated MLA，同层只走一种。FFN 是 LatentMoE——先压到 3,584，再 Top-16 / 896，两个 shared expert 始终开。",
-        map: "中轴：Hidden → Attention output → Block output → Logits。切 KDA / Gated MLA 只换 Attention 一侧。专家格 896 亮 16。薄片按 KDA/MLA 交错着色。",
-        phase: "KDA 更新固定大小 recurrent state，与序列长无关。MLA 才读写 compressed KV。界面上的层开关对应真实层类型，不是两种同时算。",
+        map: "中轴：Hidden → Attention output → Block output → Logits。KDA 与 Gated MLA 互斥。896 个 expert 里每 token 激活 16 个。",
+        phase: "KDA 更新固定大小 recurrent state，与序列长无关。MLA 才读写 compressed KV。同一层不会两种都算。",
         cost: "Attention 权重 BF16；routed expert 是 MXFP4。H200 上 MXFP4 走 marlin，按 BF16 算力计。一份 replica 通常要 16 卡。",
       },
       prefill: {
         what: "miss 段 [B, T, H] 过 93 层。KDA 层写 96×128×128 state；MLA 层写 512+64 KV。出第一个 token，时间是 TTFT。",
-        map: "激活按 B×T 画高。目录里 Attention 只列出当前层类型（KDA 或 Gated MLA）。",
-        phase: "两种层不会在同一层同时执行。播放路径会先走完 Prefill 的 KDA，再走 Prefill 的 MLA。",
+        map: "激活按 B×T。KDA 写 96×128×128 state；MLA 写 512+64 KV。",
+        phase: "93 层按层号交错：该层是 KDA 就更新 state，是 MLA 就写 KV。同一层只走一种。",
         cost: "KDA Prefill 仍对 T 做短卷积和 delta update，但不做 T×T。MLA Prefill 是完整 Attention，通常更贵。",
       },
       decode: {
@@ -248,10 +249,11 @@
         cost: "小 batch 时瓶颈常在 LatentMoE 读 16 个 expert 的 MXFP4 权重。MLA 层在长 S 时变成 HBM。",
       },
       layers: {
-        what: "代表层按当前开关展开 KDA 或 Gated MLA。其余 92 层压成薄片：深色 KDA，橙色 MLA，按层号交错。",
-        map: "薄片宽 = 7,168。点薄片回到代表层。交错从 dims.kdaLayers / mlaLayers 推导。",
-        phase: "总前向 = 69 次 KDA + 24 次 MLA + 92 次 LatentMoE（首层 dense 除外）。",
-        cost: "roofline 分别乘两种 Attention 层数，再加 MoE × 92。不要把两种 Attention 加在同一层上。",
+        title: "93 层",
+        what: "69 层 KDA，24 层 Gated MLA，按层号交错，同一层只走一种 Attention。第 1 层 FFN 是 dense，其余 92 层是 LatentMoE。",
+        map: "隐层 7,168。KDA 的 state 是 96×128×128，与序列长无关。MLA 的 KV 是 512+64，随 S 变长。",
+        phase: "Prefill 和 Decode 都过完全部 93 层。长上下文时只有 24 层读 KV；69 层 KDA 只更新固定 state。",
+        cost: "69×KDA + 24×MLA + 1×dense FFN + 92×LatentMoE。两种 Attention 不会叠在同一层上。",
       },
       chapters: [
         { id: "embed", section: "embed", title: "Embedding", nodeIds: ["text_ids", "embedding", "hidden_in"] },
@@ -283,15 +285,15 @@
           kicker: "ATTENTION · MLA",
           title: "Gated MLA",
           what: "Q 走 1,536 latent；KV 压成 512+64。完整 MLA 后再乘 output gate。只有这 24 层读长序列 KV。",
-          map: "cache 高随 S、宽 576。Gated MLA 叠 96 头。切到 KDA 时这些盒子从 DAG 消失。",
+          map: "cache 高随 S、宽 576。96 头。KDA 层没有这份 cache。",
           phase: "Prefill 写 compressed KV 并做满 Attention。Decode 读 S，追加 1。",
           cost: "24/93 层。长上下文 Decode 的 Attention 带宽几乎都在这里。KDA 层分担不了这笔。",
         },
         "attn-out": {
           kicker: "ATTENTION",
           title: "Attention 输出",
-          what: "当前层类型的输出。KDA 与 MLA 在图上是两条互斥边，汇到同一中轴盒子。",
-          map: "中轴、宽 7,168。上游只亮当前分支。",
+          what: "该层 Attention 的输出。KDA 与 MLA 互斥，都写回同一条 residual。",
+          map: "中轴、宽 7,168。",
           phase: "形状在 Prefill / Decode 都是 [B, T, 7,168]，Decode 的 T=1。",
           cost: "它本身是 residual 汇合，代价在上游分支。",
         },
@@ -389,10 +391,11 @@
         cost: "长上下文时 MLA cache 是 Attention 主项。小 batch 时读 8 个 INT4 expert。",
       },
       layers: {
-        what: "代表层展开 MLA + MoE。薄片去掉这一层之后：1 层 dense FFN（蓝）+ 59 层 MoE（绿）。",
-        map: "薄片宽 = 7,168。没有 KDA/MLA 交错，Attention 种类单一。",
-        phase: "61 层都走满 MLA。只有 FFN 在第 1 层换成 dense。",
-        cost: "Attention × 61 + dense FFN × 1 + MoE × 60。",
+        title: "61 层",
+        what: "每一层都是 MLA。第 1 层 FFN 是 dense，其余 60 层是 Top-8 / 384 MoE + 1 个 shared expert。",
+        map: "隐层 7,168。KV 以 512+64 存放。",
+        phase: "61 层 Prefill / Decode 都走。没有 KDA，也没有 IndexShare。",
+        cost: "61×MLA + 1×dense FFN + 60×MoE。",
       },
       pages: {
         embed: {
@@ -492,8 +495,8 @@
       overview: {
         kicker: "INTRO · MINIMAX M3",
         title: "MiniMax M3 · 428B / 23B",
-        what: "60 层。代表层是 block-sparse GQA：64 个 Q 头、4 个 KV 头。Lightning indexer 选 16 个 128-token 块，再加 1 个 local 块。前 3 层 dense FFN，其余 Top-4 / 128 MoE。权重 BF16。",
-        map: "中轴 Hidden → Attention residual → Block residual。Indexer 叠 4 头。专家格 128 亮 4。薄片前 3 条是 dense。",
+        what: "60 层。Attention 是 block-sparse GQA：64 个 Q 头、4 个 KV 头。Lightning indexer 选 16 个 128-token 块，再加 1 个 local 块。前 3 层 dense FFN，其余 Top-4 / 128 MoE。权重 BF16。",
+        map: "中轴 Hidden → Attention residual → Block residual。Indexer 4 头。128 个 expert 里每 token 激活 4 个。",
         phase: "KV 按全量 paged 占显存。Attention 计算只读被选中的块。",
         cost: "稀疏省的是 FLOPs，不是 KV 显存。Decode 仍按全 S 占 HBM；算力按 16×128+local。",
       },
@@ -518,10 +521,11 @@
         cost: "长上下文先撞 KV 显存。小 batch 时 MoE 读 4 个 BF16 expert。",
       },
       layers: {
-        what: "代表层是 sparse GQA + MoE。薄片去掉这一层之后：3 层 dense（蓝）+ 56 层 MoE（绿）。",
-        map: "薄片宽 = 6,144。蓝层 Attention 仍是 GQA，只是 FFN 不走 MoE。",
-        phase: "60 层都写/读 paged KV。稀疏只作用于后 57 层的 Attention 计算。",
-        cost: "dense GQA × 3 + sparse GQA × 57 + dense FFN × 3 + MoE × 57。",
+        title: "60 层",
+        what: "前 3 层 FFN 是 dense，其余 57 层是 Top-4 / 128 MoE。Attention 是 64Q / 4KV 的 block-sparse GQA：indexer 选 16 个 128-token 块，再加 1 个 local 块。",
+        map: "隐层 6,144。KV 按全序列 paged 占显存；计算只读被选中的块。",
+        phase: "60 层都写/读 paged KV。稀疏只减 Attention 计算，不减 KV 显存。",
+        cost: "3×dense GQA 与 dense FFN + 57×sparse GQA 与 MoE。",
       },
       pages: {
         embed: {
@@ -551,9 +555,9 @@
         moe: {
           kicker: "MOE",
           title: "Top-4 / 128",
-          what: "128 个 SwiGLU-OAI，每 token 4 个，6,144→3,072→6,144。1 个 shared。前 3 层不用 MoE，走 dense（薄片里的蓝层）。",
-          map: "专家格 128 亮 4。",
-          phase: "MoE 层每步路由。Dense 层没有这组盒子。",
+          what: "128 个 SwiGLU-OAI，每 token 4 个，6,144→3,072→6,144。1 个 shared。前 3 层 FFN 是 dense，不走 MoE。",
+          map: "128 个 expert 里每 token 激活 4 个。",
+          phase: "MoE 层每步路由。前 3 层没有 router。",
           cost: "BF16。小 batch Decode 读 4 个 expert 整块。激活比 GLM 少，所以 MoE 项通常轻于稀疏 GQA 的 KV。",
         },
         ep: {
