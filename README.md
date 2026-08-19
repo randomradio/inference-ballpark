@@ -30,12 +30,12 @@ KV cache hit 只减少 Prefill 的 `T_miss = T_in × (1 − h)`。GPU 规格四�
 - **Prefill**：整段 miss tokens `[B, T, H]` 过完全部层，写入 KV / recurrent state，得到第一个 output token。决定 TTFT。
 - **Decode**：只走当前 token `[B, 1, H]`，读 cache 并追加。决定 TPOT 和通常情况下的集群 output tok/s。
 
-| 模型 | 代表路径 |
-|---|---|
-| GLM-5.2 | MLA + DSA Top-2048 + IndexShare；Top-8/256 MoE |
-| Kimi K3 | 69 层 KDA / 24 层 Gated MLA（界面可切换层类型）；LatentMoE Top-16/896 |
-| Kimi K2.5 | MLA absorbed KV（512+64）；Top-8/384 MoE |
-| MiniMax M3 | Block-sparse GQA（16×128 + local）；Top-4/128 MoE；前 3 层 dense |
+| 模型 | 代表路径 | 图上其余层 |
+|---|---|---|
+| GLM-5.2 | MLA + DSA Top-2048 + IndexShare；Top-8/256 MoE | 3 dense · 每 4 层 1 个 full indexer |
+| Kimi K3 | 69 层 KDA / 24 层 Gated MLA（界面可切换层类型）；LatentMoE Top-16/896 | KDA / MLA 交错薄片 |
+| Kimi K2.5 | MLA absorbed KV（512+64）；Top-8/384 MoE | 1 dense + 60 MoE |
+| MiniMax M3 | Block-sparse GQA（16×128 + local）；Top-4/128 MoE；前 3 层 dense | 3 dense + 57 MoE |
 
 ## 怎么算
 
@@ -83,4 +83,5 @@ MoE 的 expert 权重读按本卡实际命中的 distinct expert 数整块计入
 - `js/model-graphs.js` — 单元 DAG（含 cache 角色与代价 id）
 - `js/roofline.js` — 逐步代价与吞吐
 - `js/walkthrough.js` — 纵向 DAG 与播放高亮
+- `js/explain.js` — 目录与四行说明（是什么 / 图上 / 阶段 / 代价）
 - `js/app.js` — 控件与渲染

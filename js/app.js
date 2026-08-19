@@ -13,6 +13,8 @@
   let layerClock = 0;
   let zoom = "fit";
   let currentScale = 1;
+  let explainId = "overview";
+  let panTarget = null;
 
   const fmt = (n, d = 1) => n.toLocaleString("en-US", { maximumFractionDigits: d });
   const compact = (n) => {
@@ -206,22 +208,30 @@
     );
   }
 
+  function playChapters() {
+    const model = selectedModel();
+    return model.id === "kimi-k3"
+      ? [
+        { mode: "prefill", branch: "kda", title: "Prefill · KDA 层", kicker: "PREFILL · KDA", tick: "P · KDA" },
+        { mode: "prefill", branch: "mla", title: "Prefill · Gated MLA 层", kicker: "PREFILL · MLA", tick: "P · MLA" },
+        { mode: "decode", branch: "kda", title: "Decode · KDA 层", kicker: "DECODE · KDA", tick: "D · KDA" },
+        { mode: "decode", branch: "mla", title: "Decode · Gated MLA 层", kicker: "DECODE · MLA", tick: "D · MLA" },
+      ]
+      : [
+        { mode: "prefill", branch: branch, title: "Prefill · miss tokens · [B, T, H]", kicker: "PREFILL", tick: "PREFILL" },
+        { mode: "decode", branch: branch, title: "Decode · token 2+ · [B, 1, H] + cache", kicker: "DECODE", tick: "DECODE" },
+      ];
+  }
+
+  function chapterKey(step) {
+    return `${step.mode}:${step.branch || ""}`;
+  }
+
   function buildPlayScript() {
     const model = selectedModel();
     const { hw } = readState();
-    const chapters = model.id === "kimi-k3"
-      ? [
-        { mode: "prefill", branch: "kda", title: "Prefill · KDA 层", kicker: "PREFILL · KDA" },
-        { mode: "prefill", branch: "mla", title: "Prefill · Gated MLA 层", kicker: "PREFILL · MLA" },
-        { mode: "decode", branch: "kda", title: "Decode · KDA 层", kicker: "DECODE · KDA" },
-        { mode: "decode", branch: "mla", title: "Decode · Gated MLA 层", kicker: "DECODE · MLA" },
-      ]
-      : [
-        { mode: "prefill", branch: branch, title: "Prefill · miss tokens · [B, T, H]", kicker: "PREFILL" },
-        { mode: "decode", branch: branch, title: "Decode · token 2+ · [B, 1, H] + cache", kicker: "DECODE" },
-      ];
     const steps = [];
-    chapters.forEach((chapter) => {
+    playChapters().forEach((chapter) => {
       const nodes = visibleGraphNodes(model, hw, chapter.branch);
       nodes.forEach((node, index) => {
         steps.push({
@@ -234,6 +244,20 @@
       });
     });
     return steps;
+  }
+
+  function jumpToPlayChapter(chapterIndex) {
+    if (!playSteps.length) playSteps = buildPlayScript();
+    const chapters = playChapters();
+    const target = chapters[chapterIndex];
+    if (!target) return;
+    const start = playSteps.findIndex((step) => chapterKey(step) === chapterKey(target));
+    if (start < 0) return;
+    stopPlay();
+    playIndex = start;
+    visited = new Set();
+    layerClock = 0;
+    applyStep(playSteps[playIndex]);
   }
 
   function clearPlayTimer() {
@@ -258,6 +282,8 @@
     layerClock = 0;
     mode = "prefill";
     activeNodeId = "hidden_in";
+    explainId = "overview";
+    zoom = "fit";
     syncModeButtons();
     render();
   }
@@ -271,6 +297,7 @@
     mode = step.mode;
     if (step.branch) branch = step.branch;
     activeNodeId = step.nodeId;
+    explainId = `node:${step.nodeId}`;
     visited.add(step.nodeId);
     syncModeButtons();
     render();
@@ -287,6 +314,14 @@
     playIndex += 1;
     applyStep(playSteps[playIndex]);
     if (!playing) return;
+    const cur = playSteps[playIndex];
+    const next = playSteps[playIndex + 1];
+    if (next && chapterKey(cur) !== chapterKey(next)) {
+      stopPlay();
+      updatePlayUi();
+      $("#playStatus").textContent = `${next.kicker} · Space`;
+      return;
+    }
     const delay = (520 * (playSteps[playIndex].hold || 1)) / playSpeed();
     playTimer = setTimeout(advancePlay, delay);
   }
@@ -301,6 +336,12 @@
       playIndex = -1;
       visited = new Set();
       layerClock = 0;
+      advancePlay();
+      return;
+    }
+    const cur = playSteps[playIndex];
+    const next = playSteps[playIndex + 1];
+    if (next && chapterKey(cur) !== chapterKey(next)) {
       advancePlay();
       return;
     }
@@ -320,7 +361,15 @@
     const total = playSteps.length || 1;
     const pct = playIndex < 0 ? 0 : ((playIndex + 1) / total) * 100;
     $("#playBar").style.width = `${pct}%`;
+    const chapters = playChapters();
     const step = playSteps[playIndex];
+    const onKey = step ? chapterKey(step) : "";
+    $("#playTicks").innerHTML = chapters.map((chapter, index) => (
+      `<button type="button" data-chapter="${index}" class="${chapterKey(chapter) === onKey ? "is-on" : ""}">${chapter.tick}</button>`
+    )).join("");
+    $("#playTicks").querySelectorAll("[data-chapter]").forEach((button) => {
+      button.addEventListener("click", () => jumpToPlayChapter(+button.dataset.chapter));
+    });
     if (doneLabel) {
       $("#playStatus").textContent = `${doneLabel} · ${playSteps.length} 步`;
     } else if (step) {
@@ -352,6 +401,9 @@
         mode = button.dataset.mode;
         visited = new Set();
         layerClock = 0;
+        if (explainId === "prefill" || explainId === "decode" || explainId === "overview") {
+          explainId = mode;
+        }
         syncModeButtons();
         render();
       });
@@ -362,6 +414,7 @@
         branch = button.dataset.branch;
         visited = new Set();
         layerClock = 0;
+        if (explainId === "layers") panTarget = "stack";
         syncModeButtons();
         render();
       });
@@ -391,15 +444,29 @@
       render();
     });
     $("#zoomIn").addEventListener("click", () => {
-      zoom = Math.min(1.6, (typeof zoom === "number" ? zoom : currentScale) + 0.15);
+      zoom = Math.min(4, (typeof zoom === "number" ? zoom : currentScale) * 1.25);
       render();
     });
     $("#zoomOut").addEventListener("click", () => {
-      zoom = Math.max(0.25, (typeof zoom === "number" ? zoom : currentScale) - 0.15);
+      zoom = Math.max(0.05, (typeof zoom === "number" ? zoom : currentScale) / 1.25);
       render();
     });
     $("#playSpeed").addEventListener("input", () => {
       $("#speedOut").textContent = `${playSpeed().toFixed(1)}×`;
+    });
+    $("#explainPrev").addEventListener("click", () => moveExplain(-1));
+    $("#explainNext").addEventListener("click", () => moveExplain(1));
+    window.addEventListener("keydown", (event) => {
+      if (event.target.matches("input, select, textarea")) return;
+      if (event.key === " " || event.code === "Space") {
+        event.preventDefault();
+        if (playing) stopPlay();
+        else startPlay();
+        return;
+      }
+      if (event.target.matches("button")) return;
+      if (event.key === "ArrowLeft") moveExplain(-1);
+      if (event.key === "ArrowRight") moveExplain(1);
     });
   }
 
@@ -420,8 +487,7 @@
   }
 
   function fillInspector(node, ctx, timedEntry) {
-    $("#nodeKind").textContent = `${node.kind.toUpperCase()} · ${mode.toUpperCase()}`;
-    $("#nodeTitle").textContent = node.label;
+    if (!node) return;
     $("#nodeShape").textContent = window.BallparkWalkthrough.resolveShape(node.shape, ctx);
     $("#nodeOp").textContent = node.op;
     if (timedEntry) {
@@ -440,7 +506,138 @@
       $("#nodeTime").textContent = "—";
       $("#nodeBound").textContent = "—";
     }
-    $("#nodeDetail").textContent = node.detail;
+  }
+
+  function layerNoteOf(model) {
+    const d = model.dims;
+    if (d.kdaLayers) return `${d.kdaLayers} KDA + ${d.mlaLayers} MLA`;
+    if (d.indexShareGroup) {
+      return `${d.denseLayers} dense · IndexShare /${d.indexShareGroup} · ${d.moeLayers} MoE`;
+    }
+    if (d.denseLayers) return `${d.denseLayers} dense + ${d.moeLayers} MoE`;
+    return `× ${d.layers} 层`;
+  }
+
+  function currentToc(model, nodes, hw) {
+    return window.BallparkExplain.buildToc(model, nodes, { mode, branch, ep: hw.ep });
+  }
+
+  function applyExplainItem(item) {
+    stopPlay();
+    explainId = item.id;
+    if (item.id === "layers") {
+      panTarget = "stack";
+    } else if (item.id === "read" || item.id === "overview" || item.id === "prefill" || item.id === "decode") {
+      panTarget = "fit";
+    } else if (item.nodeIds && item.nodeIds.length) {
+      panTarget = "nodes";
+    } else {
+      panTarget = "active";
+    }
+    if (item.id === "prefill" || item.id === "decode") {
+      mode = item.id;
+      visited = new Set();
+      layerClock = 0;
+      syncModeButtons();
+    }
+    if (item.nodeIds && item.nodeIds.length) {
+      const model = selectedModel();
+      const { hw } = readState();
+      const visible = new Set(visibleGraphNodes(model, hw, branch).map((node) => node.id));
+      const first = item.nodeIds.find((id) => visible.has(id));
+      if (first) {
+        activeNodeId = first;
+        visited.add(first);
+      }
+    }
+    render();
+  }
+
+  function moveExplain(delta) {
+    const model = selectedModel();
+    const { hw } = readState();
+    const nodes = visibleGraphNodes(model, hw, branch);
+    const items = currentToc(model, nodes, hw);
+    const key = explainId.startsWith("node:")
+      ? window.BallparkExplain.chapterIdFor(model, explainId, activeNodeId, nodes, { mode, branch, ep: hw.ep })
+      : explainId;
+    const index = items.findIndex((item) => item.id === key);
+    const next = items[index + delta];
+    if (next) applyExplainItem(next);
+  }
+
+  function ensureExplainVisible(model, nodes, hw) {
+    const items = currentToc(model, nodes, hw);
+    if (items.some((item) => item.id === explainId)) return;
+    if (explainId.startsWith("node:")) {
+      const id = explainId.slice(5);
+      if (nodes.some((node) => node.id === id)) return;
+    }
+    explainId = "overview";
+  }
+
+  function renderToc(model, nodes, hw) {
+    const items = currentToc(model, nodes, hw);
+    const chapterId = window.BallparkExplain.chapterIdFor(
+      model, explainId, activeNodeId, nodes, { mode, branch, ep: hw.ep },
+    );
+    const X = window.BallparkExplain.escapeHtml;
+    const titles = window.BallparkExplain.SECTION_TITLE;
+    let last = null;
+    const parts = ['<div class="toc-kicker">目录</div>'];
+    items.forEach((item) => {
+      if (item.section !== last) {
+        parts.push(`<div class="toc-sec">${X(titles[item.section] || item.section)}</div>`);
+        last = item.section;
+      }
+      const on = item.id === explainId;
+      const inn = !on && explainId.startsWith("node:") && item.id === chapterId;
+      parts.push(`<button type="button" data-explain="${X(item.id)}" class="${on ? "is-on" : inn ? "is-in" : ""}">${X(item.title)}</button>`);
+    });
+    $("#walkToc").innerHTML = parts.join("");
+    $("#walkToc").querySelectorAll("[data-explain]").forEach((button) => {
+      const item = items.find((entry) => entry.id === button.dataset.explain);
+      button.addEventListener("click", () => {
+        if (item) applyExplainItem(item);
+      });
+      button.addEventListener("pointerenter", () => {
+        const ids = new Set(item?.nodeIds || []);
+        document.querySelectorAll("#walkthroughSvg [data-node]").forEach((el) => {
+          el.classList.toggle("is-hover", ids.has(el.dataset.node));
+        });
+      });
+      button.addEventListener("pointerleave", () => {
+        document.querySelectorAll("#walkthroughSvg [data-node].is-hover").forEach((el) => {
+          el.classList.remove("is-hover");
+        });
+      });
+    });
+    const active = $("#walkToc").querySelector(".is-on");
+    const toc = $("#walkToc");
+    if (active && toc) {
+      const top = active.offsetTop - toc.clientHeight / 2 + active.clientHeight / 2;
+      toc.scrollTop = Math.max(0, top);
+    }
+  }
+
+  function fillExplain(model, node, nodes, ctx, hw, timedEntry) {
+    const page = window.BallparkExplain.page(model, {
+      explainId,
+      node,
+      nodes,
+      ctx,
+      mode,
+      branch,
+      ep: hw.ep,
+    });
+    $("#explainKicker").textContent = page.kicker;
+    $("#explainTitle").textContent = page.title;
+    $("#explainWhat").textContent = page.what;
+    $("#explainMap").textContent = page.map;
+    $("#explainPhase").textContent = page.phase;
+    $("#explainCost").textContent = page.cost;
+    fillInspector(node, ctx, timedEntry);
+    $("#explainMetrics").hidden = ["read", "overview", "prefill", "decode", "layers"].includes(explainId);
   }
 
   function renderMetrics(est, model, state) {
@@ -583,9 +780,15 @@
       mode,
       ctx,
       zoom,
-      layerNote: model.id === "kimi-k3"
-        ? `${model.dims.kdaLayers} KDA + ${model.dims.mlaLayers} MLA`
-        : `× ${model.dims.layers} 层`,
+      dims: model.dims,
+      modelId: model.id,
+      onZoom: (next) => {
+        zoom = next;
+        render();
+      },
+      layerNote: layerNoteOf(model),
+      panTarget,
+      focusIds: currentToc(model, nodes, state.hw).find((item) => item.id === explainId)?.nodeIds || [],
       activeId: activeNodeId,
       hotId,
       visitedIds: visited,
@@ -593,16 +796,36 @@
       onSelect: (id) => {
         stopPlay();
         activeNodeId = id;
+        explainId = `node:${id}`;
         visited.add(id);
         render();
       },
+      onSelectGroup: (groupId) => {
+        const section = window.BallparkExplain.GROUP_SECTION[groupId];
+        const item = currentToc(model, nodes, state.hw).find((entry) => entry.section === section);
+        if (item) applyExplainItem(item);
+      },
+      onChapter: (id) => {
+        const item = currentToc(model, nodes, state.hw).find((entry) => entry.id === id);
+        if (item) applyExplainItem(item);
+        else {
+          stopPlay();
+          explainId = id;
+          render();
+        }
+      },
     });
 
+    if (panTarget && panTarget !== "fit" && drawn?.scale) zoom = drawn.scale;
+    if (panTarget === "fit") zoom = "fit";
+    panTarget = null;
     currentScale = drawn?.scale || 1;
     $("#zoomPct").textContent = `${Math.round(currentScale * 100)}%`;
 
+    ensureExplainVisible(model, nodes, state.hw);
     const active = nodes.find((item) => item.id === activeNodeId) || nodes[0];
-    if (active) fillInspector(active, ctx, times.get(active.id));
+    renderToc(model, nodes, state.hw);
+    fillExplain(model, active, nodes, ctx, state.hw, active ? times.get(active.id) : null);
     $("#graphCaption").textContent = `${graph.caption} 证据：${graph.evidenceLevel}。`;
     $("#graphSources").innerHTML = (graph.sources || []).map((source) => (
       `<a href="${source.url}" target="_blank" rel="noreferrer">${source.label} ↗</a>`

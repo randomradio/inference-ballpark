@@ -6,7 +6,7 @@
     {
       id: "glm-52",
       name: "GLM-5.2",
-      accent: "#c9f36a",
+      accent: "#111",
       family: "DSA · IndexShare · MoE",
       scale: "744B / 40B",
       evidence: "REFERENCE FORWARD",
@@ -43,7 +43,7 @@
     {
       id: "kimi-k3",
       name: "Kimi K3",
-      accent: "#ff8d5b",
+      accent: "#111",
       family: "KDA · Gated MLA · LatentMoE",
       scale: "2.8T / 104B",
       evidence: "REFERENCE FORWARD",
@@ -83,7 +83,7 @@
     {
       id: "kimi-k25",
       name: "Kimi K2.5",
-      accent: "#83b8ff",
+      accent: "#111",
       family: "MLA · MoE",
       scale: "1T / 32B",
       evidence: "REFERENCE FORWARD",
@@ -119,7 +119,7 @@
     {
       id: "minimax-m3",
       name: "MiniMax M3",
-      accent: "#c4a574",
+      accent: "#111",
       family: "Block-sparse GQA · MoE",
       scale: "428B / 23B",
       evidence: "SERVING FORWARD",
