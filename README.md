@@ -25,7 +25,7 @@ npx wrangler@latest pages deploy --branch=main
 
 左侧是自上而下的架构图：Embedding → 带框的 Decoder Layer（Attention + MoE）→ Output Head。长 residual 绕到侧边。右侧 jigs 控制 Prefill/Decode、硬件与请求。点「播放路径」会按依赖顺序走完 Prefill，再走 Decode（Kimi K3 会再切 KDA / Gated MLA）。
 
-KV cache hit 只减少 Prefill 的 `T_miss = T_in × (1 − h)`。GPU 规格四个模型共用。TP/EP/PP 是部署参数，由模型架构和单卡显存自动推导，对照表每一行用该模型自己的摆法。节点数只表示机群规模；不足一份 replica 时会自动补齐。
+KV cache hit 只减少 Prefill 的 `T_miss = T_in × (1 − h)`。硬件预设：H200 · 8 卡/节点（默认，对照 GPUStack），以及 Vera Rubin NVL72（72 卡同一 NVLink 6 域）。TP/EP/PP 是部署参数，由模型架构和单卡显存自动推导，对照表每一行用该模型自己的摆法。8 卡节点从节点宽度起搜 replica；NVL72 这类大域从最小能装下的 replica 起搜，再往整机里叠份数。节点数只表示机群规模；不足一份 replica 时会自动补齐。
 
 - **Prefill**：整段 miss tokens `[B, T, H]` 过完全部层，写入 KV / recurrent state，得到第一个 output token。决定 TTFT。
 - **Decode**：只走当前 token `[B, 1, H]`，读 cache 并追加。决定 TPOT 和通常情况下的集群 output tok/s。
@@ -64,11 +64,11 @@ T = max(FLOPs_gpu / (FLOPS × MFU),
 
 MFU 只打折算力（prefill 大 GEMM），η_hbm 只打折带宽（decode 多为 HBM-bound），两者分开填。
 
-FLOPS 按 dtype 折算：只有 FP8 权重的 GEMM 吃满 FP8 峰值；BF16 减半；INT4 / MXFP4 在 Hopper 上走 marlin 解量化后按 BF16 MAC 跑，同样减半。所以同一张卡上 GLM-5.2（FP8）的 prefill 算力是 M3（BF16）的两倍。
+FLOPS 按 dtype 折算：只有 FP8 权重的 GEMM 吃满 FP8 峰值；BF16 按 BF16 峰值（默认 FP8/2）；INT4 / MXFP4 在 Hopper 上走 marlin 解量化后按 BF16 MAC 跑。Rubin 有原生 NVFP4（单卡 50 PFLOPS），K3 的 MXFP4 routed GEMM 按该峰值计；attn / dense 仍是 BF16（4 PFLOPS）。所以同一张卡上 GLM-5.2（FP8）的 prefill 算力是 M3（BF16）的两倍；K3 在 Rubin 上 MoE 不再走 marlin。
 
 MoE 的 expert 权重读按本卡实际命中的 distinct expert 数整块计入：`min(B×T×topk/EP, experts/EP)` 个。小 batch decode 每步都要把被路由到的 expert 权重完整读一遍，吞吐不会随 batch 线性摊薄，这正是 MoE 小并发 decode 贵的原因。
 
-拓扑按模型推导：MLA 模型一份 replica 通常 1 个节点（TP∩EP∩DP-attn）；K3 以 KDA 为主且单节点装不下权重，replica 占 2 个节点（TP16∩EP16，Attention 走 TP）。节点内 NVLink，跨节点 RoCE。
+拓扑按模型推导：MLA 模型一份 replica 通常 1 个 H200 节点（TP∩EP∩DP-attn）；K3 在 H200 上单节点装不下权重，replica 占 2 个节点（TP16∩EP16，Attention 走 TP）。Vera Rubin NVL72 单卡 288GB，K3 权重 EP8 就能放下，整机 72 卡同一 NVLink 域可叠 9 份 replica，集体不再掉到 RoCE。节点内 NVLink，跨节点 RoCE。
 
 `replica`：重叠 `max(TP, EP) × PP`，网格 `TP × EP × PP`。
 
